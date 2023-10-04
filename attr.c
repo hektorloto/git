@@ -1184,6 +1184,13 @@ static void compute_default_attr_source(struct object_id *attr_source)
 	if (!default_attr_source_tree_object_name)
 		default_attr_source_tree_object_name = getenv(GIT_ATTR_SOURCE_ENVIRONMENT);
 
+	if (!default_attr_source_tree_object_name) {
+		char *attr_tree;
+
+		if (!git_config_get_string("attr.tree", &attr_tree))
+			default_attr_source_tree_object_name = attr_tree;
+	}
+
 	if (!default_attr_source_tree_object_name || !is_null_oid(attr_source))
 		return;
 

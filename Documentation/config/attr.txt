@@ -1,0 +1,5 @@
+attr.tree:
+	A <tree-ish> to read gitattributes from instead of the worktree. See
+	linkgit:gitattributes[5]. This is equivalent to setting the
+	`GIT_ATTR_SOURCE` environment variable, or passing in --attr-source to
+	the Git command.
