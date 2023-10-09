@@ -41,6 +41,9 @@
 /* WARNING: This is also used as REACHABLE in commit-graph.c. */
 #define PULL_MERGE	(1u<<15)
 
+/* WARNING: This is also used as NEEDS_BITMAP in pack-bitmap.c. */
+#define MISSING         (1u<<22)
+
 #define TOPO_WALK_EXPLORED	(1u<<23)
 #define TOPO_WALK_INDEGREE	(1u<<24)
 
