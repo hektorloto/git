@@ -6,7 +6,6 @@ test_description="recursive merge corner cases w/ renames but not criss-crosses"
 GIT_TEST_DEFAULT_INITIAL_BRANCH_NAME=main
 export GIT_TEST_DEFAULT_INITIAL_BRANCH_NAME
 
-TEST_PASSES_SANITIZE_LEAK=true
 . ./test-lib.sh
 . "$TEST_DIRECTORY"/lib-merge.sh
 
@@ -476,7 +475,7 @@ test_expect_success 'handle rename-with-content-merge vs. add' '
 		git checkout A^0 &&
 
 		test_must_fail git merge -s recursive B^0 >out &&
-		test_i18ngrep "CONFLICT (.*/add)" out &&
+		test_grep "CONFLICT (.*/add)" out &&
 
 		git ls-files -s >out &&
 		test_line_count = 2 out &&
@@ -522,7 +521,7 @@ test_expect_success 'handle rename-with-content-merge vs. add, merge other way' 
 		git checkout B^0 &&
 
 		test_must_fail git merge -s recursive A^0 >out &&
-		test_i18ngrep "CONFLICT (.*/add)" out &&
+		test_grep "CONFLICT (.*/add)" out &&
 
 		git ls-files -s >out &&
 		test_line_count = 2 out &&
@@ -602,7 +601,7 @@ test_expect_success 'handle rename/rename (2to1) conflict correctly' '
 		git checkout B^0 &&
 
 		test_must_fail git merge -s recursive C^0 >out &&
-		test_i18ngrep "CONFLICT (\(.*\)/\1)" out &&
+		test_grep "CONFLICT (\(.*\)/\1)" out &&
 
 		git ls-files -s >out &&
 		test_line_count = 2 out &&
@@ -914,8 +913,8 @@ test_expect_merge_algorithm failure success 'rad-check: rename/add/delete confli
 		# be flexible in the type of console output message(s) reported
 		# for this particular case; we will be more stringent about the
 		# contents of the index and working directory.
-		test_i18ngrep "CONFLICT (.*/add)" out &&
-		test_i18ngrep "CONFLICT (rename.*/delete)" out &&
+		test_grep "CONFLICT (.*/add)" out &&
+		test_grep "CONFLICT (rename.*/delete)" out &&
 		test_must_be_empty err &&
 
 		git ls-files -s >file_count &&
@@ -988,8 +987,8 @@ test_expect_merge_algorithm failure success 'rrdd-check: rename/rename(2to1)/del
 		# be flexible in the type of console output message(s) reported
 		# for this particular case; we will be more stringent about the
 		# contents of the index and working directory.
-		test_i18ngrep "CONFLICT (\(.*\)/\1)" out &&
-		test_i18ngrep "CONFLICT (rename.*delete)" out &&
+		test_grep "CONFLICT (\(.*\)/\1)" out &&
+		test_grep "CONFLICT (rename.*delete)" out &&
 		test_must_be_empty err &&
 
 		git ls-files -s >file_count &&
@@ -1068,7 +1067,7 @@ test_expect_merge_algorithm failure success 'mod6-check: chains of rename/rename
 
 		test_must_fail git merge -s recursive B^0 >out 2>err &&
 
-		test_i18ngrep "CONFLICT (rename/rename)" out &&
+		test_grep "CONFLICT (rename/rename)" out &&
 		test_must_be_empty err &&
 
 		git ls-files -s >file_count &&

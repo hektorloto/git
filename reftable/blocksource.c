@@ -13,71 +13,53 @@ https://developers.google.com/open-source/licenses/bsd
 #include "reftable-blocksource.h"
 #include "reftable-error.h"
 
-static void strbuf_return_block(void *b, struct reftable_block *dest)
+static void reftable_buf_return_block(void *b UNUSED, struct reftable_block *dest)
 {
 	if (dest->len)
 		memset(dest->data, 0xff, dest->len);
 	reftable_free(dest->data);
 }
 
-static void strbuf_close(void *b)
+static void reftable_buf_close(void *b UNUSED)
 {
 }
 
-static int strbuf_read_block(void *v, struct reftable_block *dest, uint64_t off,
-			     uint32_t size)
+static ssize_t reftable_buf_read_block(void *v, struct reftable_block *dest,
+				       uint64_t off, uint32_t size)
 {
-	struct strbuf *b = v;
+	struct reftable_buf *b = v;
 	assert(off + size <= b->len);
-	dest->data = reftable_calloc(size);
+	REFTABLE_CALLOC_ARRAY(dest->data, size);
+	if (!dest->data)
+		return -1;
 	memcpy(dest->data, b->buf + off, size);
 	dest->len = size;
 	return size;
 }
 
-static uint64_t strbuf_size(void *b)
+static uint64_t reftable_buf_size(void *b)
 {
-	return ((struct strbuf *)b)->len;
+	return ((struct reftable_buf *)b)->len;
 }
 
-static struct reftable_block_source_vtable strbuf_vtable = {
-	.size = &strbuf_size,
-	.read_block = &strbuf_read_block,
-	.return_block = &strbuf_return_block,
-	.close = &strbuf_close,
+static struct reftable_block_source_vtable reftable_buf_vtable = {
+	.size = &reftable_buf_size,
+	.read_block = &reftable_buf_read_block,
+	.return_block = &reftable_buf_return_block,
+	.close = &reftable_buf_close,
 };
 
-void block_source_from_strbuf(struct reftable_block_source *bs,
-			      struct strbuf *buf)
+void block_source_from_buf(struct reftable_block_source *bs,
+			   struct reftable_buf *buf)
 {
 	assert(!bs->ops);
-	bs->ops = &strbuf_vtable;
+	bs->ops = &reftable_buf_vtable;
 	bs->arg = buf;
 }
 
-static void malloc_return_block(void *b, struct reftable_block *dest)
-{
-	if (dest->len)
-		memset(dest->data, 0xff, dest->len);
-	reftable_free(dest->data);
-}
-
-static struct reftable_block_source_vtable malloc_vtable = {
-	.return_block = &malloc_return_block,
-};
-
-static struct reftable_block_source malloc_block_source_instance = {
-	.ops = &malloc_vtable,
-};
-
-struct reftable_block_source malloc_block_source(void)
-{
-	return malloc_block_source_instance;
-}
-
 struct file_block_source {
-	int fd;
 	uint64_t size;
+	unsigned char *data;
 };
 
 static uint64_t file_size(void *b)
@@ -85,32 +67,23 @@ static uint64_t file_size(void *b)
 	return ((struct file_block_source *)b)->size;
 }
 
-static void file_return_block(void *b, struct reftable_block *dest)
+static void file_return_block(void *b UNUSED, struct reftable_block *dest UNUSED)
 {
-	if (dest->len)
-		memset(dest->data, 0xff, dest->len);
-	reftable_free(dest->data);
 }
 
-static void file_close(void *b)
+static void file_close(void *v)
 {
-	int fd = ((struct file_block_source *)b)->fd;
-	if (fd > 0) {
-		close(fd);
-		((struct file_block_source *)b)->fd = 0;
-	}
-
+	struct file_block_source *b = v;
+	munmap(b->data, b->size);
 	reftable_free(b);
 }
 
-static int file_read_block(void *v, struct reftable_block *dest, uint64_t off,
-			   uint32_t size)
+static ssize_t file_read_block(void *v, struct reftable_block *dest, uint64_t off,
+			       uint32_t size)
 {
 	struct file_block_source *b = v;
 	assert(off + size <= b->size);
-	dest->data = reftable_malloc(size);
-	if (pread(b->fd, dest->data, size, off) != size)
-		return -1;
+	dest->data = b->data + off;
 	dest->len = size;
 	return size;
 }
@@ -125,29 +98,42 @@ static struct reftable_block_source_vtable file_vtable = {
 int reftable_block_source_from_file(struct reftable_block_source *bs,
 				    const char *name)
 {
-	struct stat st = { 0 };
-	int err = 0;
-	int fd = open(name, O_RDONLY);
-	struct file_block_source *p = NULL;
+	struct file_block_source *p;
+	struct stat st;
+	int fd, err;
+
+	fd = open(name, O_RDONLY);
 	if (fd < 0) {
-		if (errno == ENOENT) {
+		if (errno == ENOENT)
 			return REFTABLE_NOT_EXIST_ERROR;
-		}
-		return -1;
+		err = -1;
+		goto out;
 	}
 
-	err = fstat(fd, &st);
-	if (err < 0) {
-		close(fd);
-		return REFTABLE_IO_ERROR;
+	if (fstat(fd, &st) < 0) {
+		err = REFTABLE_IO_ERROR;
+		goto out;
 	}
 
-	p = reftable_calloc(sizeof(struct file_block_source));
+	REFTABLE_CALLOC_ARRAY(p, 1);
+	if (!p) {
+		err = REFTABLE_OUT_OF_MEMORY_ERROR;
+		goto out;
+	}
+
 	p->size = st.st_size;
-	p->fd = fd;
+	p->data = xmmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
 
 	assert(!bs->ops);
 	bs->ops = &file_vtable;
 	bs->arg = p;
+
+	err = 0;
+
+out:
+	if (fd >= 0)
+		close(fd);
+	if (err < 0)
+		reftable_free(p);
 	return 0;
 }

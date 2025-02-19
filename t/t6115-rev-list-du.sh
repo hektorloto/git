@@ -1,6 +1,7 @@
 #!/bin/sh
 
 test_description='basic tests of rev-list --disk-usage'
+
 . ./test-lib.sh
 
 # we want a mix of reachable and unreachable, as well as
@@ -47,6 +48,13 @@ check_du () {
 check_du HEAD
 check_du --objects HEAD
 check_du --objects HEAD^..HEAD
+
+test_expect_success 'setup for --unpacked tests' '
+	git repack -adb &&
+	test_commit unpacked
+'
+
+check_du --all --objects --unpacked
 
 # As mentioned above, don't use hardcode sizes as actual size, but use the
 # output from git cat-file.

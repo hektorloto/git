@@ -1,6 +1,7 @@
 #!/bin/sh
 
 test_description='git shell tests'
+
 . ./test-lib.sh
 
 test_expect_success 'shell allows upload-pack' '

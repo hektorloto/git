@@ -5,7 +5,6 @@
 
 test_description='Test rebasing, stashing, etc. with submodules'
 
-TEST_PASSES_SANITIZE_LEAK=true
 . ./test-lib.sh
 
 test_expect_success setup '
@@ -116,7 +115,7 @@ test_expect_success 'rebasing submodule that should conflict' '
 	test_tick &&
 	git commit -m fourth &&
 
-	test_must_fail git rebase --onto HEAD^^ HEAD^ HEAD^0 >actual_output &&
+	test_must_fail git rebase --onto HEAD^^ HEAD^ HEAD^0 2>actual_output &&
 	git ls-files -s submodule >actual &&
 	(
 		cd submodule &&

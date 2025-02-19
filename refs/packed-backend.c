@@ -1,6 +1,9 @@
+#define USE_THE_REPOSITORY_VARIABLE
+#define DISABLE_SIGN_COMPARE_WARNINGS
+
 #include "../git-compat-util.h"
-#include "../alloc.h"
 #include "../config.h"
+#include "../dir.h"
 #include "../gettext.h"
 #include "../hash.h"
 #include "../hex.h"
@@ -11,6 +14,7 @@
 #include "../lockfile.h"
 #include "../chdir-notify.h"
 #include "../statinfo.h"
+#include "../worktree.h"
 #include "../wrapper.h"
 #include "../write-or-die.h"
 #include "../trace2.h"
@@ -201,9 +205,14 @@ static int release_snapshot(struct snapshot *snapshot)
 	}
 }
 
-struct ref_store *packed_ref_store_create(struct repository *repo,
-					  const char *gitdir,
-					  unsigned int store_flags)
+static size_t snapshot_hexsz(const struct snapshot *snapshot)
+{
+	return snapshot->refs->base.repo->hash_algo->hexsz;
+}
+
+struct ref_store *packed_ref_store_init(struct repository *repo,
+					const char *gitdir,
+					unsigned int store_flags)
 {
 	struct packed_ref_store *refs = xcalloc(1, sizeof(*refs));
 	struct ref_store *ref_store = (struct ref_store *)refs;
@@ -253,6 +262,15 @@ static void clear_snapshot(struct packed_ref_store *refs)
 	}
 }
 
+static void packed_ref_store_release(struct ref_store *ref_store)
+{
+	struct packed_ref_store *refs = packed_downcast(ref_store, 0, "release");
+	clear_snapshot(refs);
+	rollback_lock_file(&refs->lock);
+	delete_tempfile(&refs->tempfile);
+	free(refs->path);
+}
+
 static NORETURN void die_unterminated_line(const char *path,
 					   const char *p, size_t len)
 {
@@ -281,11 +299,13 @@ struct snapshot_record {
 	size_t len;
 };
 
-static int cmp_packed_ref_records(const void *v1, const void *v2)
+static int cmp_packed_ref_records(const void *v1, const void *v2,
+				  void *cb_data)
 {
+	const struct snapshot *snapshot = cb_data;
 	const struct snapshot_record *e1 = v1, *e2 = v2;
-	const char *r1 = e1->start + the_hash_algo->hexsz + 1;
-	const char *r2 = e2->start + the_hash_algo->hexsz + 1;
+	const char *r1 = e1->start + snapshot_hexsz(snapshot) + 1;
+	const char *r2 = e2->start + snapshot_hexsz(snapshot) + 1;
 
 	while (1) {
 		if (*r1 == '\n')
@@ -306,9 +326,9 @@ static int cmp_packed_ref_records(const void *v1, const void *v2)
  * refname.
  */
 static int cmp_record_to_refname(const char *rec, const char *refname,
-				 int start)
+				 int start, const struct snapshot *snapshot)
 {
-	const char *r1 = rec + the_hash_algo->hexsz + 1;
+	const char *r1 = rec + snapshot_hexsz(snapshot) + 1;
 	const char *r2 = refname;
 
 	while (1) {
@@ -355,7 +375,7 @@ static void sort_snapshot(struct snapshot *snapshot)
 		if (!eol)
 			/* The safety check should prevent this. */
 			BUG("unterminated line found in packed-refs");
-		if (eol - pos < the_hash_algo->hexsz + 2)
+		if (eol - pos < snapshot_hexsz(snapshot) + 2)
 			die_invalid_line(snapshot->refs->path,
 					 pos, eof - pos);
 		eol++;
@@ -381,7 +401,7 @@ static void sort_snapshot(struct snapshot *snapshot)
 		if (sorted &&
 		    nr > 1 &&
 		    cmp_packed_ref_records(&records[nr - 2],
-					   &records[nr - 1]) >= 0)
+					   &records[nr - 1], snapshot) >= 0)
 			sorted = 0;
 
 		pos = eol;
@@ -391,7 +411,7 @@ static void sort_snapshot(struct snapshot *snapshot)
 		goto cleanup;
 
 	/* We need to sort the memory. First we sort the records array: */
-	QSORT(records, nr, cmp_packed_ref_records);
+	QSORT_S(records, nr, cmp_packed_ref_records, snapshot);
 
 	/*
 	 * Allocate a new chunk of memory, and copy the old memory to
@@ -467,7 +487,8 @@ static void verify_buffer_safe(struct snapshot *snapshot)
 		return;
 
 	last_line = find_start_of_record(start, eof - 1);
-	if (*(eof - 1) != '\n' || eof - last_line < the_hash_algo->hexsz + 2)
+	if (*(eof - 1) != '\n' ||
+	    eof - last_line < snapshot_hexsz(snapshot) + 2)
 		die_invalid_line(snapshot->refs->path,
 				 last_line, eof - last_line);
 }
@@ -562,7 +583,7 @@ static const char *find_reference_location_1(struct snapshot *snapshot,
 
 		mid = lo + (hi - lo) / 2;
 		rec = find_start_of_record(lo, mid);
-		cmp = cmp_record_to_refname(rec, refname, start);
+		cmp = cmp_record_to_refname(rec, refname, start, snapshot);
 		if (cmp < 0) {
 			lo = find_end_of_record(mid, hi);
 		} else if (cmp > 0) {
@@ -775,7 +796,7 @@ static int packed_read_raw_ref(struct ref_store *ref_store, const char *refname,
 		return -1;
 	}
 
-	if (get_oid_hex(rec, oid))
+	if (get_oid_hex_algop(rec, oid, ref_store->repo->hash_algo))
 		die_invalid_line(refs->path, rec, snapshot->eof - rec);
 
 	*type = REF_ISPACKED;
@@ -859,8 +880,8 @@ static int next_record(struct packed_ref_iterator *iter)
 	iter->base.flags = REF_ISPACKED;
 	p = iter->pos;
 
-	if (iter->eof - p < the_hash_algo->hexsz + 2 ||
-	    parse_oid_hex(p, &iter->oid, &p) ||
+	if (iter->eof - p < snapshot_hexsz(iter->snapshot) + 2 ||
+	    parse_oid_hex_algop(p, &iter->oid, &p, iter->repo->hash_algo) ||
 	    !isspace(*p++))
 		die_invalid_line(iter->snapshot->refs->path,
 				 iter->pos, iter->eof - iter->pos);
@@ -877,7 +898,7 @@ static int next_record(struct packed_ref_iterator *iter)
 		if (!refname_is_safe(iter->base.refname))
 			die("packed refname is dangerous: %s",
 			    iter->base.refname);
-		oidclr(&iter->oid);
+		oidclr(&iter->oid, iter->repo->hash_algo);
 		iter->base.flags |= REF_BAD_NAME | REF_ISBROKEN;
 	}
 	if (iter->snapshot->peeled == PEELED_FULLY ||
@@ -889,8 +910,8 @@ static int next_record(struct packed_ref_iterator *iter)
 
 	if (iter->pos < iter->eof && *iter->pos == '^') {
 		p = iter->pos + 1;
-		if (iter->eof - p < the_hash_algo->hexsz + 1 ||
-		    parse_oid_hex(p, &iter->peeled, &p) ||
+		if (iter->eof - p < snapshot_hexsz(iter->snapshot) + 1 ||
+		    parse_oid_hex_algop(p, &iter->peeled, &p, iter->repo->hash_algo) ||
 		    *p++ != '\n')
 			die_invalid_line(iter->snapshot->refs->path,
 					 iter->pos, iter->eof - iter->pos);
@@ -902,13 +923,13 @@ static int next_record(struct packed_ref_iterator *iter)
 		 * we suppress it if the reference is broken:
 		 */
 		if ((iter->base.flags & REF_ISBROKEN)) {
-			oidclr(&iter->peeled);
+			oidclr(&iter->peeled, iter->repo->hash_algo);
 			iter->base.flags &= ~REF_KNOWS_PEELED;
 		} else {
 			iter->base.flags |= REF_KNOWS_PEELED;
 		}
 	} else {
-		oidclr(&iter->peeled);
+		oidclr(&iter->peeled, iter->repo->hash_algo);
 	}
 
 	return ITER_OK;
@@ -945,16 +966,13 @@ static int packed_ref_iterator_peel(struct ref_iterator *ref_iterator,
 	struct packed_ref_iterator *iter =
 		(struct packed_ref_iterator *)ref_iterator;
 
-	if (iter->repo != the_repository)
-		BUG("peeling for non-the_repository is not supported");
-
 	if ((iter->base.flags & REF_KNOWS_PEELED)) {
 		oidcpy(peeled, &iter->peeled);
 		return is_null_oid(&iter->peeled) ? -1 : 0;
 	} else if ((iter->base.flags & (REF_ISBROKEN | REF_ISSYMREF))) {
 		return -1;
 	} else {
-		return peel_object(&iter->oid, peeled) ? -1 : 0;
+		return peel_object(iter->repo, &iter->oid, peeled) ? -1 : 0;
 	}
 }
 
@@ -1112,7 +1130,7 @@ static struct ref_iterator *packed_ref_iterator_begin(
 
 	CALLOC_ARRAY(iter, 1);
 	ref_iterator = &iter->base;
-	base_ref_iterator_init(ref_iterator, &packed_ref_iterator_vtable, 1);
+	base_ref_iterator_init(ref_iterator, &packed_ref_iterator_vtable);
 
 	if (exclude_patterns)
 		populate_excluded_jump_list(iter, snapshot, exclude_patterns);
@@ -1234,6 +1252,24 @@ int packed_refs_is_locked(struct ref_store *ref_store)
 	return is_lock_file_locked(&refs->lock);
 }
 
+int packed_refs_size(struct ref_store *ref_store,
+		     size_t *out)
+{
+	struct packed_ref_store *refs = packed_downcast(ref_store, REF_STORE_READ,
+							"packed_refs_size");
+	struct stat st;
+
+	if (stat(refs->path, &st) < 0) {
+		if (errno != ENOENT)
+			return -1;
+		*out = 0;
+		return 0;
+	}
+
+	*out = st.st_size;
+	return 0;
+}
+
 /*
  * The packed-refs header line that we write out. Perhaps other traits
  * will be added later.
@@ -1245,10 +1281,24 @@ int packed_refs_is_locked(struct ref_store *ref_store)
 static const char PACKED_REFS_HEADER[] =
 	"# pack-refs with: peeled fully-peeled sorted \n";
 
-static int packed_init_db(struct ref_store *ref_store UNUSED,
-			  struct strbuf *err UNUSED)
+static int packed_ref_store_create_on_disk(struct ref_store *ref_store UNUSED,
+					   int flags UNUSED,
+					   struct strbuf *err UNUSED)
 {
 	/* Nothing to do. */
+	return 0;
+}
+
+static int packed_ref_store_remove_on_disk(struct ref_store *ref_store,
+					   struct strbuf *err)
+{
+	struct packed_ref_store *refs = packed_downcast(ref_store, 0, "remove");
+
+	if (remove_path(refs->path) < 0) {
+		strbuf_addstr(err, "could not delete packed-refs");
+		return -1;
+	}
+
 	return 0;
 }
 
@@ -1412,7 +1462,8 @@ static int write_with_updates(struct packed_ref_store *refs,
 			i++;
 		} else {
 			struct object_id peeled;
-			int peel_error = peel_object(&update->new_oid,
+			int peel_error = peel_object(refs->base.repo,
+						     &update->new_oid,
 						     &peeled);
 
 			if (write_packed_entry(out, update->refname,
@@ -1681,62 +1732,6 @@ cleanup:
 	return ret;
 }
 
-static int packed_initial_transaction_commit(struct ref_store *ref_store UNUSED,
-					    struct ref_transaction *transaction,
-					    struct strbuf *err)
-{
-	return ref_transaction_commit(transaction, err);
-}
-
-static int packed_delete_refs(struct ref_store *ref_store, const char *msg,
-			     struct string_list *refnames, unsigned int flags)
-{
-	struct packed_ref_store *refs =
-		packed_downcast(ref_store, REF_STORE_WRITE, "delete_refs");
-	struct strbuf err = STRBUF_INIT;
-	struct ref_transaction *transaction;
-	struct string_list_item *item;
-	int ret;
-
-	(void)refs; /* We need the check above, but don't use the variable */
-
-	if (!refnames->nr)
-		return 0;
-
-	/*
-	 * Since we don't check the references' old_oids, the
-	 * individual updates can't fail, so we can pack all of the
-	 * updates into a single transaction.
-	 */
-
-	transaction = ref_store_transaction_begin(ref_store, &err);
-	if (!transaction)
-		return -1;
-
-	for_each_string_list_item(item, refnames) {
-		if (ref_transaction_delete(transaction, item->string, NULL,
-					   flags, msg, &err)) {
-			warning(_("could not delete reference %s: %s"),
-				item->string, err.buf);
-			strbuf_reset(&err);
-		}
-	}
-
-	ret = ref_transaction_commit(transaction, &err);
-
-	if (ret) {
-		if (refnames->nr == 1)
-			error(_("could not delete reference %s: %s"),
-			      refnames->items[0].string, err.buf);
-		else
-			error(_("could not delete references: %s"), err.buf);
-	}
-
-	ref_transaction_free(transaction);
-	strbuf_release(&err);
-	return ret;
-}
-
 static int packed_pack_refs(struct ref_store *ref_store UNUSED,
 			    struct pack_refs_opts *pack_opts UNUSED)
 {
@@ -1753,19 +1748,29 @@ static struct ref_iterator *packed_reflog_iterator_begin(struct ref_store *ref_s
 	return empty_ref_iterator_begin();
 }
 
+static int packed_fsck(struct ref_store *ref_store UNUSED,
+		       struct fsck_options *o UNUSED,
+		       struct worktree *wt)
+{
+
+	if (!is_main_worktree(wt))
+		return 0;
+
+	return 0;
+}
+
 struct ref_storage_be refs_be_packed = {
-	.next = NULL,
 	.name = "packed",
-	.init = packed_ref_store_create,
-	.init_db = packed_init_db,
+	.init = packed_ref_store_init,
+	.release = packed_ref_store_release,
+	.create_on_disk = packed_ref_store_create_on_disk,
+	.remove_on_disk = packed_ref_store_remove_on_disk,
+
 	.transaction_prepare = packed_transaction_prepare,
 	.transaction_finish = packed_transaction_finish,
 	.transaction_abort = packed_transaction_abort,
-	.initial_transaction_commit = packed_initial_transaction_commit,
 
 	.pack_refs = packed_pack_refs,
-	.create_symref = NULL,
-	.delete_refs = packed_delete_refs,
 	.rename_ref = NULL,
 	.copy_ref = NULL,
 
@@ -1780,4 +1785,6 @@ struct ref_storage_be refs_be_packed = {
 	.create_reflog = NULL,
 	.delete_reflog = NULL,
 	.reflog_expire = NULL,
+
+	.fsck = packed_fsck,
 };

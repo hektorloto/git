@@ -1,16 +1,20 @@
+#define USE_THE_REPOSITORY_VARIABLE
+#define DISABLE_SIGN_COMPARE_WARNINGS
+
 #include "git-compat-util.h"
 #include "bundle-uri.h"
 #include "bundle.h"
 #include "copy.h"
-#include "environment.h"
 #include "gettext.h"
-#include "object-store-ll.h"
 #include "refs.h"
 #include "run-command.h"
 #include "hashmap.h"
 #include "pkt-line.h"
 #include "config.h"
+#include "fetch-pack.h"
 #include "remote.h"
+#include "trace2.h"
+#include "object-store-ll.h"
 
 static struct {
 	enum bundle_list_heuristic heuristic;
@@ -364,18 +368,27 @@ static int unbundle_from_file(struct repository *r, const char *file)
 	struct string_list_item *refname;
 	struct strbuf bundle_ref = STRBUF_INIT;
 	size_t bundle_prefix_len;
+	struct unbundle_opts opts = {
+		.flags = VERIFY_BUNDLE_QUIET |
+			 (fetch_pack_fsck_objects() ? VERIFY_BUNDLE_FSCK : 0),
+	};
 
-	if ((bundle_fd = read_bundle_header(file, &header)) < 0)
-		return 1;
+	bundle_fd = read_bundle_header(file, &header);
+	if (bundle_fd < 0) {
+		result = 1;
+		goto cleanup;
+	}
 
 	/*
 	 * Skip the reachability walk here, since we will be adding
 	 * a reachable ref pointing to the new tips, which will reach
 	 * the prerequisite commits.
 	 */
-	if ((result = unbundle(r, &header, bundle_fd, NULL,
-			       VERIFY_BUNDLE_QUIET)))
-		return 1;
+	result = unbundle(r, &header, bundle_fd, NULL, &opts);
+	if (result) {
+		result = 1;
+		goto cleanup;
+	}
 
 	/*
 	 * Convert all refs/heads/ from the bundle into refs/bundles/
@@ -396,13 +409,16 @@ static int unbundle_from_file(struct repository *r, const char *file)
 		strbuf_setlen(&bundle_ref, bundle_prefix_len);
 		strbuf_addstr(&bundle_ref, branch_name);
 
-		has_old = !read_ref(bundle_ref.buf, &old_oid);
-		update_ref("fetched bundle", bundle_ref.buf, oid,
-			   has_old ? &old_oid : NULL,
-			   REF_SKIP_OID_VERIFICATION,
-			   UPDATE_REFS_MSG_ON_ERR);
+		has_old = !refs_read_ref(get_main_ref_store(the_repository),
+					 bundle_ref.buf, &old_oid);
+		refs_update_ref(get_main_ref_store(the_repository),
+				"fetched bundle", bundle_ref.buf, oid,
+				has_old ? &old_oid : NULL,
+				0, UPDATE_REFS_MSG_ON_ERR);
 	}
 
+cleanup:
+	strbuf_release(&bundle_ref);
 	bundle_header_release(&header);
 	return result;
 }
@@ -796,6 +812,8 @@ int fetch_bundle_uri(struct repository *r, const char *uri,
 		.id = xstrdup(""),
 	};
 
+	trace2_region_enter("fetch", "fetch-bundle-uri", the_repository);
+
 	init_bundle_list(&list);
 
 	/*
@@ -821,6 +839,7 @@ cleanup:
 	for_all_bundles_in_list(&list, unlink_bundle, NULL);
 	clear_bundle_list(&list);
 	clear_remote_bundle_info(&bundle, NULL);
+	trace2_region_leave("fetch", "fetch-bundle-uri", the_repository);
 	return result;
 }
 

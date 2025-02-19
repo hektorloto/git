@@ -2,7 +2,6 @@
 
 test_description='split commit graph'
 
-TEST_PASSES_SANITIZE_LEAK=true
 . ./test-lib.sh
 . "$TEST_DIRECTORY"/lib-chunk.sh
 
@@ -13,7 +12,8 @@ test_expect_success 'setup repo' '
 	git init &&
 	git config core.commitGraph true &&
 	git config gc.writeCommitGraph false &&
-	infodir=".git/objects/info" &&
+	objdir=".git/objects" &&
+	infodir="$objdir/info" &&
 	graphdir="$infodir/commit-graphs" &&
 	test_oid_cache <<-EOM
 	shallow sha1:2132
@@ -202,7 +202,7 @@ then
 	graph_git_behavior 'alternate: commit 13 vs 6' commits/13 origin/commits/6 "fork"
 fi
 
-test_expect_success 'test merge stragety constants' '
+test_expect_success 'test merge strategy constants' '
 	git clone . merge-2 &&
 	(
 		cd merge-2 &&
@@ -284,7 +284,7 @@ test_expect_success 'verify hashes along chain, even in shallow' '
 		corrupt_file "$base_file" $(test_oid shallow) "\01" &&
 		test_must_fail git commit-graph verify --shallow 2>test_err &&
 		grep -v "^+" test_err >err &&
-		test_i18ngrep "incorrect checksum" err
+		test_grep "incorrect checksum" err
 	)
 '
 
@@ -324,7 +324,7 @@ test_expect_success 'verify --shallow does not check base contents' '
 		git commit-graph verify --shallow &&
 		test_must_fail git commit-graph verify 2>test_err &&
 		grep -v "^+" test_err >err &&
-		test_i18ngrep "incorrect checksum" err
+		test_grep "incorrect checksum" err
 	)
 '
 
@@ -337,7 +337,7 @@ test_expect_success 'warn on base graph chunk incorrect' '
 		corrupt_file "$base_file" $(test_oid base) "\01" &&
 		test_must_fail git commit-graph verify --shallow 2>test_err &&
 		grep -v "^+" test_err >err &&
-		test_i18ngrep "commit-graph chain does not match" err
+		test_grep "commit-graph chain does not match" err
 	)
 '
 
@@ -348,11 +348,11 @@ test_expect_success 'verify after commit-graph-chain corruption (base)' '
 		corrupt_file "$graphdir/commit-graph-chain" 30 "G" &&
 		test_must_fail git commit-graph verify 2>test_err &&
 		grep -v "^+" test_err >err &&
-		test_i18ngrep "invalid commit-graph chain" err &&
+		test_grep "invalid commit-graph chain" err &&
 		corrupt_file "$graphdir/commit-graph-chain" 30 "A" &&
 		test_must_fail git commit-graph verify 2>test_err &&
 		grep -v "^+" test_err >err &&
-		test_i18ngrep "unable to find all commit-graph files" err
+		test_grep "unable to find all commit-graph files" err
 	)
 '
 
@@ -363,11 +363,11 @@ test_expect_success 'verify after commit-graph-chain corruption (tip)' '
 		corrupt_file "$graphdir/commit-graph-chain" 70 "G" &&
 		test_must_fail git commit-graph verify 2>test_err &&
 		grep -v "^+" test_err >err &&
-		test_i18ngrep "invalid commit-graph chain" err &&
+		test_grep "invalid commit-graph chain" err &&
 		corrupt_file "$graphdir/commit-graph-chain" 70 "A" &&
 		test_must_fail git commit-graph verify 2>test_err &&
 		grep -v "^+" test_err >err &&
-		test_i18ngrep "unable to find all commit-graph files" err
+		test_grep "unable to find all commit-graph files" err
 	)
 '
 
@@ -397,7 +397,7 @@ test_expect_success 'verify across alternates' '
 		corrupt_file "$tip_file" 1500 "\01" &&
 		test_must_fail git commit-graph verify --shallow 2>test_err &&
 		grep -v "^+" test_err >err &&
-		test_i18ngrep "incorrect checksum" err
+		test_grep "incorrect checksum" err
 	)
 '
 
@@ -422,7 +422,7 @@ test_expect_success 'add octopus merge' '
 	git commit-graph verify --progress 2>err &&
 	test_line_count = 1 err &&
 	grep "Verifying commits in commit graph: 100% (18/18)" err &&
-	test_i18ngrep ! warning err &&
+	test_grep ! warning err &&
 	test_line_count = 3 $graphdir/commit-graph-chain
 '
 
@@ -524,7 +524,7 @@ test_expect_success 'prevent regression for duplicate commits across layers' '
 	git init dup &&
 	git -C dup commit --allow-empty -m one &&
 	git -C dup -c core.commitGraph=false commit-graph write --split=no-merge --reachable 2>err &&
-	test_i18ngrep "attempting to write a commit-graph" err &&
+	test_grep "attempting to write a commit-graph" err &&
 	git -C dup commit-graph write --split=no-merge --reachable &&
 	git -C dup commit --allow-empty -m two &&
 	git -C dup commit-graph write --split=no-merge --reachable &&
@@ -715,6 +715,29 @@ test_expect_success 'write generation data chunk when commit-graph chain is repl
 		verify_chain_files_exist $graphdir &&
 		graph_read_expect $(($NUM_FIRST_LAYER_COMMITS + $NUM_SECOND_LAYER_COMMITS)) &&
 		git commit-graph verify
+	)
+'
+
+test_expect_success 'temporary graph layer is discarded upon failure' '
+	git init layer-discard &&
+	(
+		cd layer-discard &&
+
+		test_commit A &&
+		test_commit B &&
+
+		# Intentionally remove commit "A" from the object store
+		# so that the commit-graph machinery fails to parse the
+		# parents of "B".
+		#
+		# This takes place after the commit-graph machinery has
+		# initialized a new temporary file to store the contents
+		# of the new graph layer, so will allow us to ensure
+		# that the temporary file is discarded upon failure.
+		rm $objdir/$(test_oid_to_path $(git rev-parse HEAD^)) &&
+
+		test_must_fail git commit-graph write --reachable --split &&
+		test_dir_is_empty $graphdir
 	)
 '
 

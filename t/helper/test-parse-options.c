@@ -21,6 +21,19 @@ static struct {
 	int unset;
 } length_cb;
 
+static int mode34_callback(const struct option *opt, const char *arg, int unset)
+{
+	if (unset)
+		*(int *)opt->value = 0;
+	else if (!strcmp(arg, "3"))
+		*(int *)opt->value = 3;
+	else if (!strcmp(arg, "4"))
+		*(int *)opt->value = 4;
+	else
+		return error("invalid value for '%s': '%s'", "--mode34", arg);
+	return 0;
+}
+
 static int length_callback(const struct option *opt, const char *arg, int unset)
 {
 	length_cb.called = 1;
@@ -124,6 +137,9 @@ int cmd__parse_options(int argc, const char **argv)
 		OPT_SET_INT(0, "set23", &integer, "set integer to 23", 23),
 		OPT_CMDMODE(0, "mode1", &integer, "set integer to 1 (cmdmode option)", 1),
 		OPT_CMDMODE(0, "mode2", &integer, "set integer to 2 (cmdmode option)", 2),
+		OPT_CALLBACK_F(0, "mode34", &integer, "(3|4)",
+			"set integer to 3 or 4 (cmdmode option)",
+			PARSE_OPT_CMDMODE, mode34_callback),
 		OPT_CALLBACK('L', "length", &integer, "str",
 			"get length of <str>", length_callback),
 		OPT_FILENAME('F', "file", &file, "set file to <file>"),
@@ -158,7 +174,6 @@ int cmd__parse_options(int argc, const char **argv)
 		OPT_ALIAS('Z', "alias-target", "alias-source"),
 		OPT_END(),
 	};
-	int i;
 	int ret = 0;
 
 	trace2_cmd_name("_parse_");
@@ -182,15 +197,16 @@ int cmd__parse_options(int argc, const char **argv)
 	show(&expect, &ret, "dry run: %s", dry_run ? "yes" : "no");
 	show(&expect, &ret, "file: %s", file ? file : "(not set)");
 
-	for (i = 0; i < list.nr; i++)
+	for (size_t i = 0; i < list.nr; i++)
 		show(&expect, &ret, "list: %s", list.items[i].string);
 
-	for (i = 0; i < argc; i++)
+	for (int i = 0; i < argc; i++)
 		show(&expect, &ret, "arg %02d: %s", i, argv[i]);
 
 	expect.strdup_strings = 1;
 	string_list_clear(&expect, 0);
 	string_list_clear(&list, 0);
+	free(file);
 
 	return ret;
 }
@@ -265,14 +281,16 @@ int cmd__parse_options_flags(int argc, const char **argv)
 	return parse_options_flags__cmd(argc, argv, test_flags);
 }
 
-static int subcmd_one(int argc, const char **argv, const char *prefix UNUSED)
+static int subcmd_one(int argc, const char **argv, const char *prefix UNUSED,
+		      struct repository *repo UNUSED)
 {
 	printf("fn: subcmd_one\n");
 	print_args(argc, argv);
 	return 0;
 }
 
-static int subcmd_two(int argc, const char **argv, const char *prefix UNUSED)
+static int subcmd_two(int argc, const char **argv, const char *prefix UNUSED,
+		      struct repository *repo UNUSED)
 {
 	printf("fn: subcmd_two\n");
 	print_args(argc, argv);
@@ -302,7 +320,7 @@ static int parse_subcommand__cmd(int argc, const char **argv,
 
 	printf("opt: %d\n", opt);
 
-	return fn(argc, argv, NULL);
+	return fn(argc, argv, NULL, NULL);
 }
 
 int cmd__parse_subcommand(int argc, const char **argv)

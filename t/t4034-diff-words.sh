@@ -2,7 +2,6 @@
 
 test_description='word diff colors'
 
-TEST_PASSES_SANITIZE_LEAK=true
 . ./test-lib.sh
 . "$TEST_DIRECTORY"/lib-diff.sh
 
@@ -70,7 +69,7 @@ test_language_driver () {
 		word_diff --color-words
 	'
 	test_expect_success "diff driver '$lang' in Islandic" '
-		LANG=is_IS.UTF-8 LANGUAGE=is LC_ALL="$is_IS_locale" \
+		test_env LANG=is_IS.UTF-8 LANGUAGE=is LC_ALL="$is_IS_locale" \
 		word_diff --color-words
 	'
 }

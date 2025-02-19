@@ -1,6 +1,7 @@
 #!/bin/sh
 
 test_description='git blame textconv support'
+
 . ./test-lib.sh
 
 find_blame() {

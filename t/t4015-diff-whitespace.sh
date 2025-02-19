@@ -7,7 +7,6 @@ test_description='Test special whitespace in diff engine.
 
 '
 
-TEST_PASSES_SANITIZE_LEAK=true
 . ./test-lib.sh
 . "$TEST_DIRECTORY"/lib-diff.sh
 
@@ -946,7 +945,7 @@ test_expect_success 'combined diff with autocrlf conversion' '
 	git commit -m "the other side" x &&
 	git config core.autocrlf true &&
 	test_must_fail git merge one-side >actual &&
-	test_i18ngrep "Automatic merge failed" actual &&
+	test_grep "Automatic merge failed" actual &&
 
 	git diff >actual.raw &&
 	sed -e "1,/^@@@/d" actual.raw >actual &&
@@ -1182,6 +1181,15 @@ test_expect_success 'detect moved code, complete file' '
 	EOF
 
 	test_cmp expected actual
+'
+
+test_expect_success '--color-moved with --no-ext-diff' '
+	test_config color.diff.oldMoved "yellow" &&
+	test_config color.diff.newMoved "blue" &&
+	args="--color --color-moved=zebra --no-renames HEAD" &&
+	git diff $args >expect &&
+	git -c diff.external=echo diff --no-ext-diff $args >actual &&
+	test_cmp expect actual
 '
 
 test_expect_success 'detect malicious moved code, inside file' '
@@ -2224,27 +2232,27 @@ test_expect_success 'compare whitespace delta across moved blocks' '
 
 test_expect_success 'bogus settings in move detection erroring out' '
 	test_must_fail git diff --color-moved=bogus 2>err &&
-	test_i18ngrep "must be one of" err &&
-	test_i18ngrep bogus err &&
+	test_grep "must be one of" err &&
+	test_grep bogus err &&
 
 	test_must_fail git -c diff.colormoved=bogus diff 2>err &&
-	test_i18ngrep "must be one of" err &&
-	test_i18ngrep "from command-line config" err &&
+	test_grep "must be one of" err &&
+	test_grep "from command-line config" err &&
 
 	test_must_fail git diff --color-moved-ws=bogus 2>err &&
-	test_i18ngrep "possible values" err &&
-	test_i18ngrep bogus err &&
+	test_grep "possible values" err &&
+	test_grep bogus err &&
 
 	test_must_fail git -c diff.colormovedws=bogus diff 2>err &&
-	test_i18ngrep "possible values" err &&
-	test_i18ngrep "from command-line config" err
+	test_grep "possible values" err &&
+	test_grep "from command-line config" err
 '
 
 test_expect_success 'compare whitespace delta incompatible with other space options' '
 	test_must_fail git diff \
 		--color-moved-ws=allow-indentation-change,ignore-all-space \
 		2>err &&
-	test_i18ngrep allow-indentation-change err
+	test_grep allow-indentation-change err
 '
 
 EMPTY=''

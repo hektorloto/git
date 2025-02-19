@@ -31,6 +31,7 @@ int main(int argc, const char **argv)
 	return 0;
 	/* char ?? */
 }
+
 EOF
 
 test_expect_success setup '
@@ -86,6 +87,7 @@ test_expect_success setup '
 	# Still a no-op.
 	function dummy() {}
 	EOF
+	printf "\200\nASCII\n" >invalid-utf8 &&
 	if test_have_prereq FUNNYNAMES
 	then
 		echo unusual >"\"unusual\" pathname" &&
@@ -533,6 +535,14 @@ do
 		test_cmp expected actual
 	'
 
+	test_expect_success "grep $L searches past invalid lines on UTF-8 locale" '
+		LC_ALL=en_US.UTF-8 git grep A. invalid-utf8 >actual &&
+		cat >expected <<-EOF &&
+		invalid-utf8:ASCII
+		EOF
+		test_cmp expected actual
+	'
+
 	test_expect_success FUNNYNAMES "grep $L should quote unusual pathnames" '
 		cat >expected <<-EOF &&
 		${HC}"\"unusual\" pathname":unusual
@@ -806,6 +816,19 @@ test_expect_success 'grep -f, ignore empty lines' '
 test_expect_success 'grep -f, ignore empty lines, read patterns from stdin' '
 	git grep -f - <patterns >actual &&
 	test_cmp expected actual
+'
+
+test_expect_success 'grep -f, use cwd relative file' '
+	test_when_finished "git rm -f sub/dir/file" &&
+	mkdir -p sub/dir &&
+	echo hit >sub/dir/file &&
+	git add sub/dir/file &&
+	echo hit >sub/dir/pattern &&
+	echo miss >pattern &&
+	(
+		cd sub/dir && git grep -f pattern file
+	) &&
+	git -C sub/dir grep -f pattern file
 '
 
 cat >expected <<EOF
@@ -1413,7 +1436,7 @@ test_expect_success 'grep --no-index pattern -- path' '
 
 test_expect_success 'grep --no-index complains of revs' '
 	test_must_fail git grep --no-index o main -- 2>err &&
-	test_i18ngrep "cannot be used with revs" err
+	test_grep "cannot be used with revs" err
 '
 
 test_expect_success 'grep --no-index prefers paths to revs' '
@@ -1426,7 +1449,7 @@ test_expect_success 'grep --no-index prefers paths to revs' '
 
 test_expect_success 'grep --no-index does not "diagnose" revs' '
 	test_must_fail git grep --no-index o :1:hello.c 2>err &&
-	test_i18ngrep ! -i "did you mean" err
+	test_grep ! -i "did you mean" err
 '
 
 cat >expected <<EOF

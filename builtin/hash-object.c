@@ -4,6 +4,7 @@
  * Copyright (C) Linus Torvalds, 2005
  * Copyright (C) Junio C Hamano, 2005
  */
+#define USE_THE_REPOSITORY_VARIABLE
 #include "builtin.h"
 #include "abspath.h"
 #include "config.h"
@@ -14,7 +15,6 @@
 #include "blob.h"
 #include "quote.h"
 #include "parse-options.h"
-#include "exec-cmd.h"
 #include "setup.h"
 #include "strbuf.h"
 #include "write-or-die.h"
@@ -85,7 +85,10 @@ static void hash_stdin_paths(const char *type, int no_filters, unsigned flags,
 	strbuf_release(&unquoted);
 }
 
-int cmd_hash_object(int argc, const char **argv, const char *prefix)
+int cmd_hash_object(int argc,
+		    const char **argv,
+		    const char *prefix,
+		    struct repository *repo UNUSED)
 {
 	static const char * const hash_object_usage[] = {
 		N_("git hash-object [-t <type>] [-w] [--path=<file> | --no-filters]\n"
@@ -123,6 +126,9 @@ int cmd_hash_object(int argc, const char **argv, const char *prefix)
 		prefix = setup_git_directory();
 	else
 		prefix = setup_git_directory_gently(&nongit);
+
+	if (nongit && !the_hash_algo)
+		repo_set_hash_algo(the_repository, GIT_HASH_SHA1);
 
 	if (vpath && prefix) {
 		vpath_free = prefix_filename(prefix, vpath);

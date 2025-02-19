@@ -1,7 +1,7 @@
 #ifndef CSUM_FILE_H
 #define CSUM_FILE_H
 
-#include "hash-ll.h"
+#include "hash.h"
 #include "write-or-die.h"
 
 struct progress;
@@ -11,7 +11,7 @@ struct hashfile {
 	int fd;
 	int check_fd;
 	unsigned int offset;
-	git_hash_ctx ctx;
+	struct git_hash_ctx ctx;
 	off_t total;
 	struct progress *tp;
 	const char *name;
@@ -20,6 +20,7 @@ struct hashfile {
 	size_t buffer_len;
 	unsigned char *buffer;
 	unsigned char *check_buffer;
+	const struct git_hash_algo *algop;
 
 	/**
 	 * If non-zero, skip_hash indicates that we should
@@ -32,9 +33,10 @@ struct hashfile {
 /* Checkpoint */
 struct hashfile_checkpoint {
 	off_t offset;
-	git_hash_ctx ctx;
+	struct git_hash_ctx ctx;
 };
 
+void hashfile_checkpoint_init(struct hashfile *, struct hashfile_checkpoint *);
 void hashfile_checkpoint(struct hashfile *, struct hashfile_checkpoint *);
 int hashfile_truncate(struct hashfile *, struct hashfile_checkpoint *);
 
@@ -46,7 +48,18 @@ int hashfile_truncate(struct hashfile *, struct hashfile_checkpoint *);
 struct hashfile *hashfd(int fd, const char *name);
 struct hashfile *hashfd_check(const char *name);
 struct hashfile *hashfd_throughput(int fd, const char *name, struct progress *tp);
+
+/*
+ * Free the hashfile without flushing its contents to disk. This only
+ * needs to be called when not calling `finalize_hashfile()`.
+ */
+void free_hashfile(struct hashfile *f);
+
+/*
+ * Finalize the hashfile by flushing data to disk and free'ing it.
+ */
 int finalize_hashfile(struct hashfile *, unsigned char *, enum fsync_component, unsigned int);
+void discard_hashfile(struct hashfile *);
 void hashwrite(struct hashfile *, const void *, unsigned int);
 void hashflush(struct hashfile *f);
 void crc32_begin(struct hashfile *);

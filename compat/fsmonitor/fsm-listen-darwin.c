@@ -29,6 +29,7 @@
 #include "fsmonitor--daemon.h"
 #include "fsmonitor-path-utils.h"
 #include "gettext.h"
+#include "simple-ipc.h"
 #include "string-list.h"
 #include "trace.h"
 
@@ -207,13 +208,12 @@ static void fsevent_callback(ConstFSEventStreamRef streamRef UNUSED,
 	const char *slash;
 	char *resolved = NULL;
 	struct strbuf tmp = STRBUF_INIT;
-	int k;
 
 	/*
 	 * Build a list of all filesystem changes into a private/local
 	 * list and without holding any locks.
 	 */
-	for (k = 0; k < num_of_events; k++) {
+	for (size_t k = 0; k < num_of_events; k++) {
 		/*
 		 * On Mac, we receive an array of absolute paths.
 		 */
@@ -514,6 +514,12 @@ void fsm_listen__loop(struct fsmonitor_daemon_state *state)
 		goto force_error_stop_without_loop;
 	}
 	data->stream_started = 1;
+
+	/*
+	 * Our fs event listener is now running, so it's safe to start
+	 * serving client requests.
+	 */
+	ipc_server_start_async(state->ipc_server_data);
 
 	pthread_mutex_lock(&data->dq_lock);
 	pthread_cond_wait(&data->dq_finished, &data->dq_lock);

@@ -4,17 +4,16 @@
  * Copyright (c) 2008 by Junio C Hamano
  */
 
+#define DISABLE_SIGN_COMPARE_WARNINGS
+
 #include "git-compat-util.h"
 #include "abspath.h"
 #include "color.h"
 #include "commit.h"
-#include "blob.h"
-#include "tag.h"
 #include "diff.h"
 #include "diffcore.h"
 #include "gettext.h"
 #include "revision.h"
-#include "log-tree.h"
 #include "parse-options.h"
 #include "string-list.h"
 #include "dir.h"
@@ -365,7 +364,7 @@ int diff_no_index(struct rev_info *revs,
 	 * The return code for --no-index imitates diff(1):
 	 * 0 = no changes, 1 = changes, else error
 	 */
-	ret = diff_result_code(&revs->diffopt);
+	ret = diff_result_code(revs);
 
 out:
 	for (i = 0; i < ARRAY_SIZE(to_free); i++)

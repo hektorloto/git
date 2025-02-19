@@ -1,16 +1,21 @@
+#define USE_THE_REPOSITORY_VARIABLE
+
 #include "builtin.h"
 #include "config.h"
 #include "gettext.h"
-#include "repository.h"
 #include "revision.h"
 #include "reachable.h"
 #include "wildmatch.h"
 #include "worktree.h"
 #include "reflog.h"
+#include "refs.h"
 #include "parse-options.h"
 
 #define BUILTIN_REFLOG_SHOW_USAGE \
 	N_("git reflog [show] [<log-options>] [<ref>]")
+
+#define BUILTIN_REFLOG_LIST_USAGE \
+	N_("git reflog list")
 
 #define BUILTIN_REFLOG_EXPIRE_USAGE \
 	N_("git reflog expire [--expire=<time>] [--expire-unreachable=<time>]\n" \
@@ -26,6 +31,11 @@
 
 static const char *const reflog_show_usage[] = {
 	BUILTIN_REFLOG_SHOW_USAGE,
+	NULL,
+};
+
+static const char *const reflog_list_usage[] = {
+	BUILTIN_REFLOG_LIST_USAGE,
 	NULL,
 };
 
@@ -46,6 +56,7 @@ static const char *const reflog_exists_usage[] = {
 
 static const char *const reflog_usage[] = {
 	BUILTIN_REFLOG_SHOW_USAGE,
+	BUILTIN_REFLOG_LIST_USAGE,
 	BUILTIN_REFLOG_EXPIRE_USAGE,
 	BUILTIN_REFLOG_DELETE_USAGE,
 	BUILTIN_REFLOG_EXISTS_USAGE,
@@ -60,8 +71,7 @@ struct worktree_reflogs {
 	struct string_list reflogs;
 };
 
-static int collect_reflog(const char *ref, const struct object_id *oid UNUSED,
-			  int flags UNUSED, void *cb_data)
+static int collect_reflog(const char *ref, void *cb_data)
 {
 	struct worktree_reflogs *cb = cb_data;
 	struct worktree *worktree = cb->worktree;
@@ -96,8 +106,7 @@ static struct reflog_expire_cfg *find_cfg_ent(const char *pattern, size_t len)
 		reflog_expire_cfg_tail = &reflog_expire_cfg;
 
 	for (ent = reflog_expire_cfg; ent; ent = ent->next)
-		if (!strncmp(ent->pattern, pattern, len) &&
-		    ent->pattern[len] == '\0')
+		if (!xstrncmpz(ent->pattern, pattern, len))
 			return ent;
 
 	FLEX_ALLOC_MEM(ent, pattern, pattern, len);
@@ -226,7 +235,8 @@ static int expire_total_callback(const struct option *opt,
 	return 0;
 }
 
-static int cmd_reflog_show(int argc, const char **argv, const char *prefix)
+static int cmd_reflog_show(int argc, const char **argv, const char *prefix,
+			   struct repository *repo UNUSED)
 {
 	struct option options[] = {
 		OPT_END()
@@ -236,19 +246,44 @@ static int cmd_reflog_show(int argc, const char **argv, const char *prefix)
 		      PARSE_OPT_KEEP_DASHDASH | PARSE_OPT_KEEP_ARGV0 |
 		      PARSE_OPT_KEEP_UNKNOWN_OPT);
 
-	return cmd_log_reflog(argc, argv, prefix);
+	return cmd_log_reflog(argc, argv, prefix, the_repository);
 }
 
-static int cmd_reflog_expire(int argc, const char **argv, const char *prefix)
+static int show_reflog(const char *refname, void *cb_data UNUSED)
+{
+	printf("%s\n", refname);
+	return 0;
+}
+
+static int cmd_reflog_list(int argc, const char **argv, const char *prefix,
+			   struct repository *repo UNUSED)
+{
+	struct option options[] = {
+		OPT_END()
+	};
+	struct ref_store *ref_store;
+
+	argc = parse_options(argc, argv, prefix, options, reflog_list_usage, 0);
+	if (argc)
+		return error(_("%s does not accept arguments: '%s'"),
+			     "list", argv[0]);
+
+	ref_store = get_main_ref_store(the_repository);
+
+	return refs_for_each_reflog(ref_store, show_reflog, NULL);
+}
+
+static int cmd_reflog_expire(int argc, const char **argv, const char *prefix,
+			     struct repository *repo UNUSED)
 {
 	struct cmd_reflog_expire_cb cmd = { 0 };
 	timestamp_t now = time(NULL);
-	int i, status, do_all, all_worktrees = 1;
+	int i, status, do_all, single_worktree = 0;
 	unsigned int flags = 0;
 	int verbose = 0;
 	reflog_expiry_should_prune_fn *should_prune_fn = should_expire_reflog_ent;
 	const struct option options[] = {
-		OPT_BIT(0, "dry-run", &flags, N_("do not actually prune any entries"),
+		OPT_BIT('n', "dry-run", &flags, N_("do not actually prune any entries"),
 			EXPIRE_REFLOGS_DRY_RUN),
 		OPT_BIT(0, "rewrite", &flags,
 			N_("rewrite the old SHA1 with the new SHA1 of the entry that now precedes it"),
@@ -268,7 +303,7 @@ static int cmd_reflog_expire(int argc, const char **argv, const char *prefix)
 		OPT_BOOL(0, "stale-fix", &cmd.stalefix,
 			 N_("prune any reflog entries that point to broken commits")),
 		OPT_BOOL(0, "all", &do_all, N_("process the reflogs of all references")),
-		OPT_BOOL(1, "single-worktree", &all_worktrees,
+		OPT_BOOL(0, "single-worktree", &single_worktree,
 			 N_("limits processing to reflogs from the current worktree only")),
 		OPT_END()
 	};
@@ -298,7 +333,7 @@ static int cmd_reflog_expire(int argc, const char **argv, const char *prefix)
 		struct rev_info revs;
 
 		repo_init_revisions(the_repository, &revs, prefix);
-		revs.do_not_die_on_missing_tree = 1;
+		revs.do_not_die_on_missing_objects = 1;
 		revs.ignore_missing = 1;
 		revs.ignore_missing_links = 1;
 		if (verbose)
@@ -318,7 +353,7 @@ static int cmd_reflog_expire(int argc, const char **argv, const char *prefix)
 
 		worktrees = get_worktrees();
 		for (p = worktrees; *p; p++) {
-			if (!all_worktrees && !(*p)->is_current)
+			if (single_worktree && !(*p)->is_current)
 				continue;
 			collected.worktree = *p;
 			refs_for_each_reflog(get_worktree_ref_store(*p),
@@ -333,11 +368,12 @@ static int cmd_reflog_expire(int argc, const char **argv, const char *prefix)
 			};
 
 			set_reflog_expiry_param(&cb.cmd,  item->string);
-			status |= reflog_expire(item->string, flags,
-						reflog_expiry_prepare,
-						should_prune_fn,
-						reflog_expiry_cleanup,
-						&cb);
+			status |= refs_reflog_expire(get_main_ref_store(the_repository),
+						     item->string, flags,
+						     reflog_expiry_prepare,
+						     should_prune_fn,
+						     reflog_expiry_cleanup,
+						     &cb);
 		}
 		string_list_clear(&collected.reflogs, 0);
 	}
@@ -346,29 +382,31 @@ static int cmd_reflog_expire(int argc, const char **argv, const char *prefix)
 		char *ref;
 		struct expire_reflog_policy_cb cb = { .cmd = cmd };
 
-		if (!dwim_log(argv[i], strlen(argv[i]), NULL, &ref)) {
+		if (!repo_dwim_log(the_repository, argv[i], strlen(argv[i]), NULL, &ref)) {
 			status |= error(_("%s points nowhere!"), argv[i]);
 			continue;
 		}
 		set_reflog_expiry_param(&cb.cmd, ref);
-		status |= reflog_expire(ref, flags,
-					reflog_expiry_prepare,
-					should_prune_fn,
-					reflog_expiry_cleanup,
-					&cb);
+		status |= refs_reflog_expire(get_main_ref_store(the_repository),
+					     ref, flags,
+					     reflog_expiry_prepare,
+					     should_prune_fn,
+					     reflog_expiry_cleanup,
+					     &cb);
 		free(ref);
 	}
 	return status;
 }
 
-static int cmd_reflog_delete(int argc, const char **argv, const char *prefix)
+static int cmd_reflog_delete(int argc, const char **argv, const char *prefix,
+			     struct repository *repo UNUSED)
 {
 	int i, status = 0;
 	unsigned int flags = 0;
 	int verbose = 0;
 
 	const struct option options[] = {
-		OPT_BIT(0, "dry-run", &flags, N_("do not actually prune any entries"),
+		OPT_BIT('n', "dry-run", &flags, N_("do not actually prune any entries"),
 			EXPIRE_REFLOGS_DRY_RUN),
 		OPT_BIT(0, "rewrite", &flags,
 			N_("rewrite the old SHA1 with the new SHA1 of the entry that now precedes it"),
@@ -391,7 +429,8 @@ static int cmd_reflog_delete(int argc, const char **argv, const char *prefix)
 	return status;
 }
 
-static int cmd_reflog_exists(int argc, const char **argv, const char *prefix)
+static int cmd_reflog_exists(int argc, const char **argv, const char *prefix,
+			     struct repository *repo UNUSED)
 {
 	struct option options[] = {
 		OPT_END()
@@ -406,18 +445,23 @@ static int cmd_reflog_exists(int argc, const char **argv, const char *prefix)
 	refname = argv[0];
 	if (check_refname_format(refname, REFNAME_ALLOW_ONELEVEL))
 		die(_("invalid ref format: %s"), refname);
-	return !reflog_exists(refname);
+	return !refs_reflog_exists(get_main_ref_store(the_repository),
+				   refname);
 }
 
 /*
  * main "reflog"
  */
 
-int cmd_reflog(int argc, const char **argv, const char *prefix)
+int cmd_reflog(int argc,
+	       const char **argv,
+	       const char *prefix,
+	       struct repository *repository)
 {
 	parse_opt_subcommand_fn *fn = NULL;
 	struct option options[] = {
 		OPT_SUBCOMMAND("show", &fn, cmd_reflog_show),
+		OPT_SUBCOMMAND("list", &fn, cmd_reflog_list),
 		OPT_SUBCOMMAND("expire", &fn, cmd_reflog_expire),
 		OPT_SUBCOMMAND("delete", &fn, cmd_reflog_delete),
 		OPT_SUBCOMMAND("exists", &fn, cmd_reflog_exists),
@@ -429,7 +473,7 @@ int cmd_reflog(int argc, const char **argv, const char *prefix)
 			     PARSE_OPT_KEEP_DASHDASH | PARSE_OPT_KEEP_ARGV0 |
 			     PARSE_OPT_KEEP_UNKNOWN_OPT);
 	if (fn)
-		return fn(argc - 1, argv + 1, prefix);
+		return fn(argc - 1, argv + 1, prefix, repository);
 	else
-		return cmd_log_reflog(argc, argv, prefix);
+		return cmd_log_reflog(argc, argv, prefix, repository);
 }

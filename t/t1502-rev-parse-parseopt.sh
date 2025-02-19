@@ -1,6 +1,7 @@
 #!/bin/sh
 
 test_description='test git rev-parse --parseopt'
+
 . ./test-lib.sh
 
 check_invalid_long_option () {
@@ -321,5 +322,16 @@ test_expect_success 'test --parseopt positivated option for optionspec-neg' '
 check_invalid_long_option optionspec-neg --no-positive-only
 check_invalid_long_option optionspec-neg --negative
 check_invalid_long_option optionspec-neg --no-no-negative
+
+test_expect_success 'ambiguous: --no matches both --noble and --no-noble' '
+	cat >spec <<-\EOF &&
+	some-command [options]
+	--
+	noble The feudal switch.
+	EOF
+	test_expect_code 129 env GIT_TEST_DISALLOW_ABBREVIATED_OPTIONS=false \
+	git rev-parse --parseopt -- <spec 2>err --no &&
+	grep "error: ambiguous option: no (could be --noble or --no-noble)" err
+'
 
 test_done

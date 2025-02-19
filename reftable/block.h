@@ -18,15 +18,19 @@ https://developers.google.com/open-source/licenses/bsd
  * allocation overhead.
  */
 struct block_writer {
-	uint8_t *buf;
+	z_stream *zstream;
+	unsigned char *compressed;
+	size_t compressed_cap;
+
+	uint8_t *block;
 	uint32_t block_size;
 
 	/* Offset of the global header. Nonzero in the first block only. */
 	uint32_t header_off;
 
 	/* How often to restart keys. */
-	int restart_interval;
-	int hash_size;
+	uint16_t restart_interval;
+	uint32_t hash_size;
 
 	/* Offset of next uint8_t to write. */
 	uint32_t next;
@@ -34,15 +38,17 @@ struct block_writer {
 	uint32_t restart_len;
 	uint32_t restart_cap;
 
-	struct strbuf last_key;
+	struct reftable_buf last_key;
+	/* Scratch buffer used to avoid allocations. */
+	struct reftable_buf scratch;
 	int entries;
 };
 
 /*
- * initializes the blockwriter to write `typ` entries, using `buf` as temporary
- * storage. `buf` is not owned by the block_writer. */
-void block_writer_init(struct block_writer *bw, uint8_t typ, uint8_t *buf,
-		       uint32_t block_size, uint32_t header_off, int hash_size);
+ * initializes the blockwriter to write `typ` entries, using `block` as temporary
+ * storage. `block` is not owned by the block_writer. */
+int block_writer_init(struct block_writer *bw, uint8_t typ, uint8_t *block,
+		      uint32_t block_size, uint32_t header_off, uint32_t hash_size);
 
 /* returns the block type (eg. 'r' for ref records. */
 uint8_t block_writer_type(struct block_writer *bw);
@@ -56,6 +62,8 @@ int block_writer_finish(struct block_writer *w);
 /* clears out internally allocated block_writer members. */
 void block_writer_release(struct block_writer *bw);
 
+struct z_stream;
+
 /* Read a block. */
 struct block_reader {
 	/* offset of the block header; nonzero for the first block in a
@@ -64,7 +72,12 @@ struct block_reader {
 
 	/* the memory block */
 	struct reftable_block block;
-	int hash_size;
+	uint32_t hash_size;
+
+	/* Uncompressed data for log entries. */
+	z_stream *zstream;
+	unsigned char *uncompressed_data;
+	size_t uncompressed_cap;
 
 	/* size of the data, excluding restart data. */
 	uint32_t block_len;
@@ -76,50 +89,58 @@ struct block_reader {
 	uint32_t full_block_size;
 };
 
+/* initializes a block reader. */
+int block_reader_init(struct block_reader *br, struct reftable_block *bl,
+		      uint32_t header_off, uint32_t table_block_size,
+		      uint32_t hash_size);
+
+void block_reader_release(struct block_reader *br);
+
+/* Returns the block type (eg. 'r' for refs) */
+uint8_t block_reader_type(const struct block_reader *r);
+
+/* Decodes the first key in the block */
+int block_reader_first_key(const struct block_reader *br, struct reftable_buf *key);
+
 /* Iterate over entries in a block */
 struct block_iter {
 	/* offset within the block of the next entry to read. */
 	uint32_t next_off;
-	struct block_reader *br;
+	const unsigned char *block;
+	size_t block_len;
+	uint32_t hash_size;
 
 	/* key for last entry we read. */
-	struct strbuf last_key;
+	struct reftable_buf last_key;
+	struct reftable_buf scratch;
 };
 
-/* initializes a block reader. */
-int block_reader_init(struct block_reader *br, struct reftable_block *bl,
-		      uint32_t header_off, uint32_t table_block_size,
-		      int hash_size);
+#define BLOCK_ITER_INIT { \
+	.last_key = REFTABLE_BUF_INIT, \
+	.scratch = REFTABLE_BUF_INIT, \
+}
 
 /* Position `it` at start of the block */
-void block_reader_start(struct block_reader *br, struct block_iter *it);
+void block_iter_seek_start(struct block_iter *it, const struct block_reader *br);
 
 /* Position `it` to the `want` key in the block */
-int block_reader_seek(struct block_reader *br, struct block_iter *it,
-		      struct strbuf *want);
-
-/* Returns the block type (eg. 'r' for refs) */
-uint8_t block_reader_type(struct block_reader *r);
-
-/* Decodes the first key in the block */
-int block_reader_first_key(struct block_reader *br, struct strbuf *key);
-
-void block_iter_copy_from(struct block_iter *dest, struct block_iter *src);
+int block_iter_seek_key(struct block_iter *it, const struct block_reader *br,
+			struct reftable_buf *want);
 
 /* return < 0 for error, 0 for OK, > 0 for EOF. */
 int block_iter_next(struct block_iter *it, struct reftable_record *rec);
 
-/* Seek to `want` with in the block pointed to by `it` */
-int block_iter_seek(struct block_iter *it, struct strbuf *want);
+/* Reset the block iterator to pristine state without releasing its memory. */
+void block_iter_reset(struct block_iter *it);
 
 /* deallocate memory for `it`. The block reader and its block is left intact. */
 void block_iter_close(struct block_iter *it);
 
 /* size of file header, depending on format version */
-int header_size(int version);
+size_t header_size(int version);
 
 /* size of file footer, depending on format version */
-int footer_size(int version);
+size_t footer_size(int version);
 
 /* returns a block to its source. */
 void reftable_block_done(struct reftable_block *ret);

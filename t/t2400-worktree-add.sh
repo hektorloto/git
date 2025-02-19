@@ -126,6 +126,28 @@ test_expect_success 'die the same branch is already checked out' '
 	)
 '
 
+test_expect_success 'refuse to reset a branch in use elsewhere' '
+	(
+		cd here &&
+
+		# we know we are on detached HEAD but just in case ...
+		git checkout --detach HEAD &&
+		git rev-parse --verify HEAD >old.head &&
+
+		git rev-parse --verify refs/heads/newmain >old.branch &&
+		test_must_fail git checkout -B newmain 2>error &&
+		git rev-parse --verify refs/heads/newmain >new.branch &&
+		git rev-parse --verify HEAD >new.head &&
+
+		grep "already used by worktree at" error &&
+		test_cmp old.branch new.branch &&
+		test_cmp old.head new.head &&
+
+		# and we must be still on the same detached HEAD state
+		test_must_fail git symbolic-ref HEAD
+	)
+'
+
 test_expect_success SYMLINKS 'die the same branch is already checked out (symlink)' '
 	head=$(git -C there rev-parse --git-path HEAD) &&
 	ref=$(git -C there symbolic-ref HEAD) &&
@@ -405,7 +427,7 @@ test_expect_success '"add" worktree with orphan branch, lock, and reason' '
 # Note: Quoted arguments containing spaces are not supported.
 test_wt_add_orphan_hint () {
 	local context="$1" &&
-	local use_branch=$2 &&
+	local use_branch="$2" &&
 	shift 2 &&
 	local opts="$*" &&
 	test_expect_success "'worktree add' show orphan hint in bad/orphan HEAD w/ $context" '
@@ -415,7 +437,7 @@ test_wt_add_orphan_hint () {
 		git -C repo switch --orphan noref &&
 		test_must_fail git -C repo worktree add $opts foobar/ 2>actual &&
 		! grep "error: unknown switch" actual &&
-		grep "hint: If you meant to create a worktree containing a new orphan branch" actual &&
+		grep "hint: If you meant to create a worktree containing a new unborn branch" actual &&
 		if [ $use_branch -eq 1 ]
 		then
 			grep -E "^hint: +git worktree add --orphan -b [^ ]+ [^ ]+$" actual
@@ -436,7 +458,7 @@ test_expect_success "'worktree add' doesn't show orphan hint in bad/orphan HEAD 
 	(cd repo && test_commit commit) &&
 	test_must_fail git -C repo worktree add --quiet foobar_branch foobar/ 2>actual &&
 	! grep "error: unknown switch" actual &&
-	! grep "hint: If you meant to create a worktree containing a new orphan branch" actual
+	! grep "hint: If you meant to create a worktree containing a new unborn branch" actual
 '
 
 test_expect_success 'local clone from linked checkout' '
@@ -468,7 +490,8 @@ test_expect_success 'put a worktree under rebase' '
 		cd under-rebase &&
 		set_fake_editor &&
 		FAKE_LINES="edit 1" git rebase -i HEAD^ &&
-		git worktree list | grep "under-rebase.*detached HEAD"
+		git worktree list >actual &&
+		grep "under-rebase.*detached HEAD" actual
 	)
 '
 
@@ -509,7 +532,8 @@ test_expect_success 'checkout a branch under bisect' '
 		git bisect start &&
 		git bisect bad &&
 		git bisect good HEAD~2 &&
-		git worktree list | grep "under-bisect.*detached HEAD" &&
+		git worktree list >actual &&
+		grep "under-bisect.*detached HEAD" actual &&
 		test_must_fail git worktree add new-bisect under-bisect &&
 		! test -d new-bisect
 	)
@@ -709,9 +733,9 @@ test_expect_success 'git worktree --no-guess-remote option overrides config' '
 test_dwim_orphan () {
 	local info_text="No possible source branch, inferring '--orphan'" &&
 	local fetch_error_text="fatal: No local or remote refs exist despite at least one remote" &&
-	local orphan_hint="hint: If you meant to create a worktree containing a new orphan branch" &&
+	local orphan_hint="hint: If you meant to create a worktree containing a new unborn branch" &&
 	local invalid_ref_regex="^fatal: invalid reference: " &&
-	local bad_combo_regex="^fatal: '[-a-z]*' and '[-a-z]*' cannot be used together" &&
+	local bad_combo_regex="^fatal: options '[-a-z]*' and '[-a-z]*' cannot be used together" &&
 
 	local git_ns="repo" &&
 	local dashc_args="-C $git_ns" &&
@@ -1180,6 +1204,52 @@ test_expect_success '"add" with initialized submodule, with submodule.recurse un
 
 test_expect_success '"add" with initialized submodule, with submodule.recurse set' '
 	git -C project-clone -c submodule.recurse worktree add ../project-5
+'
+
+test_expect_success 'can create worktrees with relative paths' '
+	test_when_finished "git worktree remove relative" &&
+	test_config worktree.useRelativePaths false &&
+	git worktree add --relative-paths ./relative &&
+	echo "gitdir: ../.git/worktrees/relative" >expect &&
+	test_cmp expect relative/.git &&
+	echo "../../../relative/.git" >expect &&
+	test_cmp expect .git/worktrees/relative/gitdir
+'
+
+test_expect_success 'can create worktrees with absolute paths' '
+	test_config worktree.useRelativePaths true &&
+	git worktree add ./relative &&
+	echo "gitdir: ../.git/worktrees/relative" >expect &&
+	test_cmp expect relative/.git &&
+	git worktree add --no-relative-paths ./absolute &&
+	echo "gitdir: $(pwd)/.git/worktrees/absolute" >expect &&
+	test_cmp expect absolute/.git &&
+	echo "$(pwd)/absolute/.git" >expect &&
+	test_cmp expect .git/worktrees/absolute/gitdir
+'
+
+test_expect_success 'move repo without breaking relative internal links' '
+	test_when_finished rm -rf repo moved &&
+	git init repo &&
+	(
+		cd repo &&
+		test_commit initial &&
+		git worktree add --relative-paths wt1 &&
+		cd .. &&
+		mv repo moved &&
+		cd moved/wt1 &&
+		git worktree list >out 2>err &&
+		test_must_be_empty err
+	)
+'
+
+test_expect_success 'relative worktree sets extension config' '
+	test_when_finished "rm -rf repo" &&
+	git init repo &&
+	git -C repo commit --allow-empty -m base &&
+	git -C repo worktree add --relative-paths ./foo &&
+	test_cmp_config -C repo 1 core.repositoryformatversion &&
+	test_cmp_config -C repo true extensions.relativeworktrees
 '
 
 test_done

@@ -4,7 +4,6 @@ test_description='Test merge without common ancestors'
 GIT_TEST_DEFAULT_INITIAL_BRANCH_NAME=main
 export GIT_TEST_DEFAULT_INITIAL_BRANCH_NAME
 
-TEST_PASSES_SANITIZE_LEAK=true
 . ./test-lib.sh
 
 # This scenario is based on a real-world repository of Shawn Pearce.
@@ -88,7 +87,7 @@ test_expect_success 'result contains a conflict' '
 '
 
 test_expect_success 'virtual trees were processed' '
-	# TODO: fragile test, relies on ambigious merge-base resolution
+	# TODO: fragile test, relies on ambiguous merge-base resolution
 	git ls-files --stage >out &&
 
 	cat >expect <<-EOF &&

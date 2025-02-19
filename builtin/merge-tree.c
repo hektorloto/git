@@ -1,4 +1,5 @@
-#define USE_THE_INDEX_VARIABLE
+#define USE_THE_REPOSITORY_VARIABLE
+
 #include "builtin.h"
 #include "tree-walk.h"
 #include "xdiff-interface.h"
@@ -11,9 +12,7 @@
 #include "object-name.h"
 #include "object-store-ll.h"
 #include "parse-options.h"
-#include "repository.h"
 #include "blob.h"
-#include "exec-cmd.h"
 #include "merge-blobs.h"
 #include "quote.h"
 #include "tree.h"
@@ -365,7 +364,7 @@ static void trivial_merge_trees(struct tree_desc t[3], const char *base)
 
 	setup_traverse_info(&info, base);
 	info.fn = threeway_callback;
-	traverse_trees(&the_index, 3, t, &info);
+	traverse_trees(the_repository->index, 3, t, &info);
 }
 
 static void *get_tree_descriptor(struct repository *r,
@@ -430,45 +429,61 @@ static int real_merge(struct merge_tree_options *o,
 	struct merge_options opt;
 
 	copy_merge_options(&opt, &o->merge_options);
-	parent1 = get_merge_parent(branch1);
-	if (!parent1)
-		help_unknown_ref(branch1, "merge-tree",
-				 _("not something we can merge"));
-
-	parent2 = get_merge_parent(branch2);
-	if (!parent2)
-		help_unknown_ref(branch2, "merge-tree",
-				 _("not something we can merge"));
-
 	opt.show_rename_progress = 0;
 
 	opt.branch1 = branch1;
 	opt.branch2 = branch2;
 
 	if (merge_base) {
-		struct commit *base_commit;
 		struct tree *base_tree, *parent1_tree, *parent2_tree;
 
-		base_commit = lookup_commit_reference_by_name(merge_base);
-		if (!base_commit)
-			die(_("could not lookup commit '%s'"), merge_base);
+		/*
+		 * We actually only need the trees because we already
+		 * have a merge base.
+		 */
+		struct object_id base_oid, head_oid, merge_oid;
+
+		if (repo_get_oid_treeish(the_repository, merge_base, &base_oid))
+			die(_("could not parse as tree '%s'"), merge_base);
+		base_tree = parse_tree_indirect(&base_oid);
+		if (!base_tree)
+			die(_("unable to read tree (%s)"), oid_to_hex(&base_oid));
+		if (repo_get_oid_treeish(the_repository, branch1, &head_oid))
+			die(_("could not parse as tree '%s'"), branch1);
+		parent1_tree = parse_tree_indirect(&head_oid);
+		if (!parent1_tree)
+			die(_("unable to read tree (%s)"), oid_to_hex(&head_oid));
+		if (repo_get_oid_treeish(the_repository, branch2, &merge_oid))
+			die(_("could not parse as tree '%s'"), branch2);
+		parent2_tree = parse_tree_indirect(&merge_oid);
+		if (!parent2_tree)
+			die(_("unable to read tree (%s)"), oid_to_hex(&merge_oid));
 
 		opt.ancestor = merge_base;
-		base_tree = repo_get_commit_tree(the_repository, base_commit);
-		parent1_tree = repo_get_commit_tree(the_repository, parent1);
-		parent2_tree = repo_get_commit_tree(the_repository, parent2);
 		merge_incore_nonrecursive(&opt, base_tree, parent1_tree, parent2_tree, &result);
 	} else {
+		parent1 = get_merge_parent(branch1);
+		if (!parent1)
+			help_unknown_ref(branch1, "merge-tree",
+					 _("not something we can merge"));
+
+		parent2 = get_merge_parent(branch2);
+		if (!parent2)
+			help_unknown_ref(branch2, "merge-tree",
+					 _("not something we can merge"));
+
 		/*
 		 * Get the merge bases, in reverse order; see comment above
 		 * merge_incore_recursive in merge-ort.h
 		 */
-		merge_bases = repo_get_merge_bases(the_repository, parent1,
-						   parent2);
+		if (repo_get_merge_bases(the_repository, parent1,
+					 parent2, &merge_bases) < 0)
+			exit(128);
 		if (!merge_bases && !o->allow_unrelated_histories)
 			die(_("refusing to merge unrelated histories"));
 		merge_bases = reverse_commit_list(merge_bases);
 		merge_incore_recursive(&opt, merge_bases, parent1, parent2, &result);
+		free_commit_list(merge_bases);
 	}
 
 	if (result.clean < 0)
@@ -483,10 +498,9 @@ static int real_merge(struct merge_tree_options *o,
 	if (!result.clean) {
 		struct string_list conflicted_files = STRING_LIST_INIT_NODUP;
 		const char *last = NULL;
-		int i;
 
 		merge_get_conflicted_files(&result, &conflicted_files);
-		for (i = 0; i < conflicted_files.nr; i++) {
+		for (size_t i = 0; i < conflicted_files.nr; i++) {
 			const char *name = conflicted_files.items[i].string;
 			struct stage_info *c = conflicted_files.items[i].util;
 			if (!o->name_only)
@@ -512,13 +526,17 @@ static int real_merge(struct merge_tree_options *o,
 	return !result.clean; /* result.clean < 0 handled above */
 }
 
-int cmd_merge_tree(int argc, const char **argv, const char *prefix)
+int cmd_merge_tree(int argc,
+		   const char **argv,
+		   const char *prefix,
+		   struct repository *repo UNUSED)
 {
 	struct merge_tree_options o = { .show_messages = -1 };
 	struct strvec xopts = STRVEC_INIT;
 	int expected_remaining_argc;
 	int original_argc;
 	const char *merge_base = NULL;
+	int ret;
 
 	const char * const merge_tree_usage[] = {
 		N_("git merge-tree [--write-tree] [<options>] <branch1> <branch2>"),
@@ -549,7 +567,7 @@ int cmd_merge_tree(int argc, const char **argv, const char *prefix)
 			   PARSE_OPT_NONEG),
 		OPT_STRING(0, "merge-base",
 			   &merge_base,
-			   N_("commit"),
+			   N_("tree-ish"),
 			   N_("specify a merge-base for the merge")),
 		OPT_STRVEC('X', "strategy-option", &xopts, N_("option=value"),
 			N_("option for selected merge strategy")),
@@ -557,7 +575,7 @@ int cmd_merge_tree(int argc, const char **argv, const char *prefix)
 	};
 
 	/* Init merge options */
-	init_merge_options(&o.merge_options, the_repository);
+	init_ui_merge_options(&o.merge_options, the_repository);
 
 	/* Parse arguments */
 	original_argc = argc - 1; /* ignoring argv[0] */
@@ -566,7 +584,7 @@ int cmd_merge_tree(int argc, const char **argv, const char *prefix)
 
 	if (xopts.nr && o.mode == MODE_TRIVIAL)
 		die(_("--trivial-merge is incompatible with all other options"));
-	for (int x = 0; x < xopts.nr; x++)
+	for (size_t x = 0; x < xopts.nr; x++)
 		if (parse_merge_opt(&o.merge_options, xopts.v[x]))
 			die(_("unknown strategy option: -X%s"), xopts.v[x]);
 
@@ -577,7 +595,8 @@ int cmd_merge_tree(int argc, const char **argv, const char *prefix)
 		if (o.mode == MODE_TRIVIAL)
 			die(_("--trivial-merge is incompatible with all other options"));
 		if (merge_base)
-			die(_("--merge-base is incompatible with --stdin"));
+			die(_("options '%s' and '%s' cannot be used together"),
+			    "--merge-base", "--stdin");
 		line_termination = '\0';
 		while (strbuf_getline_lf(&buf, stdin) != EOF) {
 			struct strbuf **split;
@@ -610,7 +629,9 @@ int cmd_merge_tree(int argc, const char **argv, const char *prefix)
 			strbuf_list_free(split);
 		}
 		strbuf_release(&buf);
-		return 0;
+
+		ret = 0;
+		goto out;
 	}
 
 	/* Figure out which mode to use */
@@ -649,7 +670,11 @@ int cmd_merge_tree(int argc, const char **argv, const char *prefix)
 
 	/* Do the relevant type of merge */
 	if (o.mode == MODE_REAL)
-		return real_merge(&o, merge_base, argv[0], argv[1], prefix);
+		ret = real_merge(&o, merge_base, argv[0], argv[1], prefix);
 	else
-		return trivial_merge(argv[0], argv[1], argv[2]);
+		ret = trivial_merge(argv[0], argv[1], argv[2]);
+
+out:
+	strvec_clear(&xopts);
+	return ret;
 }

@@ -3,7 +3,6 @@
 test_description='applying patch with mode bits'
 
 
-TEST_PASSES_SANITIZE_LEAK=true
 . ./test-lib.sh
 
 test_expect_success setup '
@@ -41,7 +40,8 @@ test_expect_success FILEMODE 'same mode (index only)' '
 	chmod +x file &&
 	git add file &&
 	git apply --cached patch-0.txt &&
-	git ls-files -s file | grep "^100755"
+	git ls-files -s file >ls-files-output &&
+	test_grep "^100755" ls-files-output
 '
 
 test_expect_success FILEMODE 'mode update (no index)' '
@@ -60,19 +60,20 @@ test_expect_success FILEMODE 'mode update (with index)' '
 test_expect_success FILEMODE 'mode update (index only)' '
 	git reset --hard &&
 	git apply --cached patch-1.txt &&
-	git ls-files -s file | grep "^100755"
+	git ls-files -s file >ls-files-output &&
+	test_grep "^100755" ls-files-output
 '
 
 test_expect_success FILEMODE 'empty mode is rejected' '
 	git reset --hard &&
 	test_must_fail git apply patch-empty-mode.txt 2>err &&
-	test_i18ngrep "invalid mode" err
+	test_grep "invalid mode" err
 '
 
 test_expect_success FILEMODE 'bogus mode is rejected' '
 	git reset --hard &&
 	test_must_fail git apply patch-bogus-mode.txt 2>err &&
-	test_i18ngrep "invalid mode" err
+	test_grep "invalid mode" err
 '
 
 test_expect_success POSIXPERM 'do not use core.sharedRepository for working tree files' '
@@ -99,6 +100,95 @@ test_expect_success POSIXPERM 'do not use core.sharedRepository for working tree
 		test_cmp f1_mode.expected f1_mode.actual &&
 		test_cmp d_mode.expected d_mode.actual
 	)
+'
+
+test_expect_success 'git apply respects core.fileMode' '
+	test_config core.fileMode false &&
+	echo true >script.sh &&
+	git add --chmod=+x script.sh &&
+	git ls-files -s script.sh >ls-files-output &&
+	test_grep "^100755" ls-files-output &&
+	test_tick && git commit -m "Add script" &&
+	git ls-tree -r HEAD script.sh >ls-tree-output &&
+	test_grep "^100755" ls-tree-output &&
+
+	echo true >>script.sh &&
+	test_tick && git commit -m "Modify script" script.sh &&
+	git format-patch -1 --stdout >patch &&
+	test_grep "^index.*100755$" patch &&
+
+	git switch -c branch HEAD^ &&
+	git apply --index patch 2>err &&
+	test_grep ! "has type 100644, expected 100755" err &&
+	git reset --hard &&
+
+	git apply patch 2>err &&
+	test_grep ! "has type 100644, expected 100755" err &&
+
+	git apply --cached patch 2>err &&
+	test_grep ! "has type 100644, expected 100755" err
+'
+
+test_expect_success POSIXPERM 'patch mode for new file is canonicalized' '
+	cat >patch <<-\EOF &&
+	diff --git a/non-canon b/non-canon
+	new file mode 100660
+	--- /dev/null
+	+++ b/non-canon
+	+content
+	EOF
+	test_when_finished "git reset --hard" &&
+	(
+		umask 0 &&
+		git apply --index patch 2>err
+	) &&
+	test_must_be_empty err &&
+	git ls-files -s -- non-canon >staged &&
+	test_grep "^100644" staged &&
+	ls -l non-canon >worktree &&
+	test_grep "^-rw-rw-rw" worktree
+'
+
+test_expect_success POSIXPERM 'patch mode for deleted file is canonicalized' '
+	test_when_finished "git reset --hard" &&
+	echo content >non-canon &&
+	chmod 666 non-canon &&
+	git add non-canon &&
+
+	cat >patch <<-\EOF &&
+	diff --git a/non-canon b/non-canon
+	deleted file mode 100660
+	--- a/non-canon
+	+++ /dev/null
+	@@ -1 +0,0 @@
+	-content
+	EOF
+	git apply --index patch 2>err &&
+	test_must_be_empty err &&
+	git ls-files -- non-canon >staged &&
+	test_must_be_empty staged &&
+	test_path_is_missing non-canon
+'
+
+test_expect_success POSIXPERM 'patch mode for mode change is canonicalized' '
+	test_when_finished "git reset --hard" &&
+	echo content >non-canon &&
+	git add non-canon &&
+
+	cat >patch <<-\EOF &&
+	diff --git a/non-canon b/non-canon
+	old mode 100660
+	new mode 100770
+	EOF
+	(
+		umask 0 &&
+		git apply --index patch 2>err
+	) &&
+	test_must_be_empty err &&
+	git ls-files -s -- non-canon >staged &&
+	test_grep "^100755" staged &&
+	ls -l non-canon >worktree &&
+	test_grep "^-rwxrwxrwx" worktree
 '
 
 test_done

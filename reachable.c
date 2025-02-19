@@ -1,8 +1,9 @@
+#define USE_THE_REPOSITORY_VARIABLE
+
 #include "git-compat-util.h"
 #include "gettext.h"
 #include "hex.h"
 #include "refs.h"
-#include "tag.h"
 #include "commit.h"
 #include "blob.h"
 #include "diff.h"
@@ -18,6 +19,7 @@
 #include "pack-mtimes.h"
 #include "config.h"
 #include "run-command.h"
+#include "sequencer.h"
 
 struct connectivity_progress {
 	struct progress *progress;
@@ -31,7 +33,53 @@ static void update_progress(struct connectivity_progress *cp)
 		display_progress(cp->progress, cp->count);
 }
 
-static int add_one_ref(const char *path, const struct object_id *oid,
+static void add_one_file(const char *path, struct rev_info *revs)
+{
+	struct strbuf buf = STRBUF_INIT;
+	struct object_id oid;
+	struct object *object;
+
+	if (!read_oneliner(&buf, path, READ_ONELINER_SKIP_IF_EMPTY)) {
+		strbuf_release(&buf);
+		return;
+	}
+	strbuf_trim(&buf);
+	if (!get_oid_hex(buf.buf, &oid)) {
+		object = parse_object_or_die(&oid, buf.buf);
+		add_pending_object(revs, object, "");
+	}
+	strbuf_release(&buf);
+}
+
+/* Mark objects recorded in rebase state files as reachable. */
+static void add_rebase_files(struct rev_info *revs)
+{
+	struct strbuf buf = STRBUF_INIT;
+	size_t len;
+	const char *path[] = {
+		"rebase-apply/autostash",
+		"rebase-apply/orig-head",
+		"rebase-merge/autostash",
+		"rebase-merge/orig-head",
+	};
+	struct worktree **worktrees = get_worktrees();
+
+	for (struct worktree **wt = worktrees; *wt; wt++) {
+		strbuf_reset(&buf);
+		strbuf_addstr(&buf, get_worktree_git_dir(*wt));
+		strbuf_complete(&buf, '/');
+		len = buf.len;
+		for (size_t i = 0; i < ARRAY_SIZE(path); i++) {
+			strbuf_setlen(&buf, len);
+			strbuf_addstr(&buf, path[i]);
+			add_one_file(buf.buf, revs);
+		}
+	}
+	strbuf_release(&buf);
+	free_worktrees(worktrees);
+}
+
+static int add_one_ref(const char *path, const char *referent UNUSED, const struct object_id *oid,
 		       int flag, void *cb_data)
 {
 	struct rev_info *revs = (struct rev_info *)cb_data;
@@ -191,7 +239,7 @@ static int want_recent_object(struct recent_data *data,
 			      const struct object_id *oid)
 {
 	if (data->ignore_in_core_kept_packs &&
-	    has_object_kept_pack(oid, IN_CORE_KEEP_PACKS))
+	    has_object_kept_pack(data->revs->repo, oid, IN_CORE_KEEP_PACKS))
 		return 0;
 	return 1;
 }
@@ -276,7 +324,7 @@ int add_unseen_recent_objects_to_traversal(struct rev_info *revs,
 	if (ignore_in_core_kept_packs)
 		flags |= FOR_EACH_OBJECT_SKIP_IN_CORE_KEPT_PACKS;
 
-	r = for_each_packed_object(add_recent_packed, &data, flags);
+	r = for_each_packed_object(revs->repo, add_recent_packed, &data, flags);
 
 done:
 	oidset_clear(&data.extra_recent_oids);
@@ -317,11 +365,15 @@ void mark_reachable_objects(struct rev_info *revs, int mark_reflog,
 	add_index_objects_to_pending(revs, 0);
 
 	/* Add all external refs */
-	for_each_ref(add_one_ref, revs);
+	refs_for_each_ref(get_main_ref_store(the_repository), add_one_ref,
+			  revs);
 
 	/* detached HEAD is not included in the list above */
-	head_ref(add_one_ref, revs);
+	refs_head_ref(get_main_ref_store(the_repository), add_one_ref, revs);
 	other_head_refs(add_one_ref, revs);
+
+	/* rebase autostash and orig-head */
+	add_rebase_files(revs);
 
 	/* Add all reflog info */
 	if (mark_reflog)

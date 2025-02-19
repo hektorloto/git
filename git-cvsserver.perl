@@ -15,7 +15,7 @@
 ####
 ####
 
-use 5.008;
+require v5.26;
 use strict;
 use warnings;
 use bytes;
@@ -26,7 +26,7 @@ use File::Path qw/rmtree/;
 use File::Basename;
 use Getopt::Long qw(:config require_order no_ignore_case);
 
-my $VERSION = '@@GIT_VERSION@@';
+my $VERSION = '@GIT_VERSION@';
 
 my $log = GITCVS::log->new();
 my $cfg;

@@ -1,3 +1,6 @@
+#define USE_THE_REPOSITORY_VARIABLE
+#define DISABLE_SIGN_COMPARE_WARNINGS
+
 #include "git-compat-util.h"
 #include "abspath.h"
 #include "parse.h"
@@ -109,16 +112,37 @@ static struct pathspec_magic {
 	{ PATHSPEC_ATTR,    '\0', "attr" },
 };
 
-static void prefix_magic(struct strbuf *sb, int prefixlen, unsigned magic)
+static void prefix_magic(struct strbuf *sb, int prefixlen,
+			 unsigned magic, const char *element)
 {
-	int i;
-	strbuf_addstr(sb, ":(");
-	for (i = 0; i < ARRAY_SIZE(pathspec_magic); i++)
-		if (magic & pathspec_magic[i].bit) {
-			if (sb->buf[sb->len - 1] != '(')
-				strbuf_addch(sb, ',');
-			strbuf_addstr(sb, pathspec_magic[i].name);
+	/* No magic was found in element, just add prefix magic */
+	if (!magic) {
+		strbuf_addf(sb, ":(prefix:%d)", prefixlen);
+		return;
+	}
+
+	/*
+	 * At this point, we know that parse_element_magic() was able
+	 * to extract some pathspec magic from element. So we know
+	 * element is correctly formatted in either shorthand or
+	 * longhand form
+	 */
+	if (element[1] != '(') {
+		/* Process an element in shorthand form (e.g. ":!/<match>") */
+		strbuf_addstr(sb, ":(");
+		for (int i = 0; i < ARRAY_SIZE(pathspec_magic); i++) {
+			if ((magic & pathspec_magic[i].bit) &&
+			    pathspec_magic[i].mnemonic) {
+				if (sb->buf[sb->len - 1] != '(')
+					strbuf_addch(sb, ',');
+				strbuf_addstr(sb, pathspec_magic[i].name);
+			}
 		}
+	} else {
+		/* For the longhand form, we copy everything up to the final ')' */
+		size_t len = strchr(element, ')') - element;
+		strbuf_add(sb, element, len);
+	}
 	strbuf_addf(sb, ",prefix:%d)", prefixlen);
 }
 
@@ -472,9 +496,9 @@ static void init_pathspec_item(struct pathspec_item *item, unsigned flags,
 			if (!have_git_dir())
 				die(_("'%s' is outside the directory tree"),
 				    copyfrom);
-			hint_path = get_git_work_tree();
+			hint_path = repo_get_work_tree(the_repository);
 			if (!hint_path)
-				hint_path = get_git_dir();
+				hint_path = repo_get_git_dir(the_repository);
 			die(_("%s: '%s' is outside repository at '%s'"), elt,
 			    copyfrom, absolute_path(hint_path));
 		}
@@ -493,7 +517,7 @@ static void init_pathspec_item(struct pathspec_item *item, unsigned flags,
 		struct strbuf sb = STRBUF_INIT;
 
 		/* Preserve the actual prefix length of each pattern */
-		prefix_magic(&sb, prefixlen, element_magic);
+		prefix_magic(&sb, prefixlen, element_magic, elt);
 
 		strbuf_addstr(&sb, match);
 		item->original = strbuf_detach(&sb, NULL);

@@ -1,6 +1,9 @@
 /*
  * Copyright (c) 2006 Rene Scharfe
  */
+
+#define USE_THE_REPOSITORY_VARIABLE
+
 #include "git-compat-util.h"
 #include "config.h"
 #include "archive.h"
@@ -10,6 +13,7 @@
 #include "streaming.h"
 #include "utf8.h"
 #include "object-store-ll.h"
+#include "strbuf.h"
 #include "userdiff.h"
 #include "write-or-die.h"
 #include "xdiff-interface.h"

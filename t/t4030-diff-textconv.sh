@@ -1,6 +1,7 @@
 #!/bin/sh
 
 test_description='diff.*.textconv tests'
+
 . ./test-lib.sh
 
 find_diff() {

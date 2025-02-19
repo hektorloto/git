@@ -1,6 +1,7 @@
 #!/bin/sh
 
 test_description='git mv in subdirs'
+
 . ./test-lib.sh
 . "$TEST_DIRECTORY"/lib-diff-data.sh
 
@@ -296,7 +297,7 @@ test_expect_success 'git mv error on conflicted file' '
 	EOF
 
 	test_must_fail git mv conflict newname 2>actual &&
-	test_i18ngrep "conflicted" actual
+	test_grep "conflicted" actual
 '
 
 test_expect_success 'git mv should overwrite symlink to a file' '
@@ -482,7 +483,7 @@ test_expect_success 'checking out a commit before submodule moved needs manual u
 	git mv sub sub2 &&
 	git commit -m "moved sub to sub2" &&
 	git checkout -q HEAD^ 2>actual &&
-	test_i18ngrep "^warning: unable to rmdir '\''sub2'\'':" actual &&
+	test_grep "^warning: unable to rmdir '\''sub2'\'':" actual &&
 	git status -s sub2 >actual &&
 	echo "?? sub2/" >expected &&
 	test_cmp expected actual &&
@@ -547,6 +548,18 @@ test_expect_success 'moving nested submodules' '
 	git submodule update --init --recursive &&
 	git mv nested_move sub_nested_moved &&
 	git status
+'
+
+test_expect_failure 'nonsense mv triggers assertion failure and partially updated index' '
+	test_when_finished git reset --hard HEAD &&
+	git reset --hard HEAD &&
+	mkdir -p a &&
+	mkdir -p b &&
+	>a/a.txt &&
+	git add a/a.txt &&
+	test_must_fail git mv a/a.txt a b &&
+	git status --porcelain >actual &&
+	grep "^A[ ]*a/a.txt$" actual
 '
 
 test_done

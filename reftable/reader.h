@@ -16,9 +16,9 @@ https://developers.google.com/open-source/licenses/bsd
 
 uint64_t block_source_size(struct reftable_block_source *source);
 
-int block_source_read_block(struct reftable_block_source *source,
-			    struct reftable_block *dest, uint64_t off,
-			    uint32_t size);
+ssize_t block_source_read_block(struct reftable_block_source *source,
+				struct reftable_block *dest, uint64_t off,
+				uint32_t size);
 void block_source_close(struct reftable_block_source *source);
 
 /* metadata for a block type */
@@ -30,15 +30,15 @@ struct reftable_reader_offsets {
 
 /* The state for reading a reftable file. */
 struct reftable_reader {
-	/* for convience, associate a name with the instance. */
+	/* for convenience, associate a name with the instance. */
 	char *name;
 	struct reftable_block_source source;
 
 	/* Size of the file, excluding the footer. */
 	uint64_t size;
 
-	/* 'sha1' for SHA1, 's256' for SHA-256 */
-	uint32_t hash_id;
+	/* The hash function used for ref records. */
+	enum reftable_hash hash_id;
 
 	uint32_t block_size;
 	uint64_t min_update_index;
@@ -50,12 +50,15 @@ struct reftable_reader {
 	struct reftable_reader_offsets ref_offsets;
 	struct reftable_reader_offsets obj_offsets;
 	struct reftable_reader_offsets log_offsets;
+
+	uint64_t refcount;
 };
 
-int init_reader(struct reftable_reader *r, struct reftable_block_source *source,
-		const char *name);
-void reader_close(struct reftable_reader *r);
 const char *reader_name(struct reftable_reader *r);
+
+int reader_init_iter(struct reftable_reader *r,
+		     struct reftable_iterator *it,
+		     uint8_t typ);
 
 /* initialize a block reader to read from `r` */
 int reader_init_block_reader(struct reftable_reader *r, struct block_reader *br,

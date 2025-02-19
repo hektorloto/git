@@ -1,9 +1,10 @@
+#define USE_THE_REPOSITORY_VARIABLE
+
 #include "builtin.h"
 #include "config.h"
-#include "dir.h"
 #include "gettext.h"
 #include "parse-options.h"
-#include "repository.h"
+
 #include "string-list.h"
 #include "rerere.h"
 #include "xdiff/xdiff.h"
@@ -49,10 +50,13 @@ static int diff_two(const char *file1, const char *label1,
 	return ret;
 }
 
-int cmd_rerere(int argc, const char **argv, const char *prefix)
+int cmd_rerere(int argc,
+	       const char **argv,
+	       const char *prefix,
+	       struct repository *repo UNUSED)
 {
 	struct string_list merge_rr = STRING_LIST_INIT_DUP;
-	int i, autoupdate = -1, flags = 0;
+	int autoupdate = -1, flags = 0;
 
 	struct option options[] = {
 		OPT_SET_INT(0, "rerere-autoupdate", &autoupdate,
@@ -74,11 +78,17 @@ int cmd_rerere(int argc, const char **argv, const char *prefix)
 
 	if (!strcmp(argv[0], "forget")) {
 		struct pathspec pathspec;
+		int ret;
+
 		if (argc < 2)
 			warning(_("'git rerere forget' without paths is deprecated"));
 		parse_pathspec(&pathspec, 0, PATHSPEC_PREFER_CWD,
 			       prefix, argv + 1);
-		return rerere_forget(the_repository, &pathspec);
+
+		ret = rerere_forget(the_repository, &pathspec);
+
+		clear_pathspec(&pathspec);
+		return ret;
 	}
 
 	if (!strcmp(argv[0], "clear")) {
@@ -89,11 +99,11 @@ int cmd_rerere(int argc, const char **argv, const char *prefix)
 		if (setup_rerere(the_repository, &merge_rr,
 				 flags | RERERE_READONLY) < 0)
 			return 0;
-		for (i = 0; i < merge_rr.nr; i++)
+		for (size_t i = 0; i < merge_rr.nr; i++)
 			printf("%s\n", merge_rr.items[i].string);
 	} else if (!strcmp(argv[0], "remaining")) {
 		rerere_remaining(the_repository, &merge_rr);
-		for (i = 0; i < merge_rr.nr; i++) {
+		for (size_t i = 0; i < merge_rr.nr; i++) {
 			if (merge_rr.items[i].util != RERERE_RESOLVED)
 				printf("%s\n", merge_rr.items[i].string);
 			else
@@ -105,7 +115,7 @@ int cmd_rerere(int argc, const char **argv, const char *prefix)
 		if (setup_rerere(the_repository, &merge_rr,
 				 flags | RERERE_READONLY) < 0)
 			return 0;
-		for (i = 0; i < merge_rr.nr; i++) {
+		for (size_t i = 0; i < merge_rr.nr; i++) {
 			const char *path = merge_rr.items[i].string;
 			const struct rerere_id *id = merge_rr.items[i].util;
 			if (diff_two(rerere_path(id, "preimage"), path, path, path))

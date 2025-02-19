@@ -5,7 +5,6 @@ test_description='unpack-trees error messages'
 GIT_TEST_DEFAULT_INITIAL_BRANCH_NAME=main
 export GIT_TEST_DEFAULT_INITIAL_BRANCH_NAME
 
-TEST_PASSES_SANITIZE_LEAK=true
 . ./test-lib.sh
 
 
@@ -65,7 +64,7 @@ Please move or remove them before you merge.
 Aborting
 EOF
 
-test_expect_success 'untracked files or local changes ovewritten by merge' '
+test_expect_success 'untracked files or local changes overwritten by merge' '
 	git add two &&
 	git add three &&
 	git add four &&
